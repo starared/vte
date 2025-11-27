@@ -1,0 +1,22 @@
+# VTE - Go 版本 Docker Compose
+# 内存占用 ~10-20MB
+
+version: '3.8'
+
+services:
+  vte:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vte
+    ports:
+      - "8050:8050"
+    volumes:
+      - vte-data:/app/data
+    environment:
+      - ADMIN_PASSWORD=admin123
+      # - SECRET_KEY=your-secret-key-here
+    restart: unless-stopped
+
+volumes:
+  vte-data:
