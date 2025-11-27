@@ -15,7 +15,7 @@ echo "[3/3] 启动新容器..."
 docker run -d \
   --name vte \
   -p 8050:8050 \
-  -v vte-data:/app/backend/data \
+  -v vte-data:/app/data \
   --restart unless-stopped \
   rtyedfty/vte:latest
 

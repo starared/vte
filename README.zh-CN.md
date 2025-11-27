@@ -39,7 +39,7 @@ docker run -d \
 | 参数 | 说明 | 是否必须 |
 |------|------|----------|
 | `-p 8050:8050` | 端口映射，改左边数字换端口 | 必须 |
-| `-v vte-data:/app/backend/data` | 数据持久化 | 建议 |
+| `-v vte-data:/app/data` | 数据持久化 | 建议 |
 | `-e ADMIN_PASSWORD=xxx` | 自定义管理员密码 | 可选 |
 | `-e SECRET_KEY=xxx` | JWT 密钥 | 可选 |
 | `--restart unless-stopped` | 自动重启 | 建议 |
