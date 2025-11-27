@@ -43,29 +43,40 @@ func CheckVersion(c *gin.Context) {
 func getLatestVersion() string {
 	client := &http.Client{Timeout: 5 * time.Second}
 
-	// 从 GitHub Release 获取最新版本
-	resp, err := client.Get("https://api.github.com/repos/starared/vte/releases/latest")
-	if err != nil {
-		log.Printf("[WARN] 检查更新失败: %v", err)
-		return "" // 返回空字符串表示获取失败
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		log.Printf("[WARN] 检查更新失败: HTTP %d", resp.StatusCode)
-		return ""
+	// 尝试多个源获取最新版本
+	urls := []string{
+		"https://api.github.com/repos/starared/vte/releases/latest",
+		"https://ghp.ci/https://api.github.com/repos/starared/vte/releases/latest", // GitHub 代理
 	}
 
-	var result struct {
-		TagName string `json:"tag_name"`
+	for _, url := range urls {
+		resp, err := client.Get(url)
+		if err != nil {
+			log.Printf("[WARN] 检查更新失败 (%s): %v", url, err)
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			log.Printf("[WARN] 检查更新失败 (%s): HTTP %d", url, resp.StatusCode)
+			continue
+		}
+
+		var result struct {
+			TagName string `json:"tag_name"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			log.Printf("[WARN] 解析版本信息失败: %v", err)
+			continue
+		}
+
+		// 移除 'v' 前缀
+		version := strings.TrimPrefix(result.TagName, "v")
+		if version != "" {
+			return version
+		}
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		log.Printf("[WARN] 解析版本信息失败: %v", err)
-		return ""
-	}
-
-	// 移除 'v' 前缀
-	version := strings.TrimPrefix(result.TagName, "v")
-	return version
+	return "" // 所有源都失败
 }
