@@ -201,7 +201,7 @@ curl http://127.0.0.1:8050/v1/chat/completions \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "openai/gpt-4",
+    "model": "gpt-4",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -216,7 +216,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="openai/gpt-4",
+    model="gpt-4",
     messages=[{"role": "user", "content": "Hello!"}]
 )
 print(response.choices[0].message.content)

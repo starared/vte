@@ -47,14 +47,9 @@ docker run -d --name vte -p 8050:8050 -v vte-data:/app/data --restart unless-sto
         <pre class="code"># 拉取最新代码
 git pull
 
-# 重新构建前端
-cd frontend && npm install && npm run build
-
-# 重新构建后端
-cd ../backend && go build -o vte .
-
-# 重启服务
-./vte</pre>
+# 运行启动脚本（会自动重新构建）
+start.bat      # Windows
+./start.sh     # Linux/Mac</pre>
       </div>
     </el-card>
 
