@@ -1,5 +1,7 @@
 # VTE - Multi-backend LLM API Gateway
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 A lightweight, self-hosted API gateway that unifies multiple AI service providers with an OpenAI-compatible interface.
 
 ## ✨ Features

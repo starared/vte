@@ -1,5 +1,7 @@
 # VTE - 多后端 LLM API 网关
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 轻量级、自托管的 API 网关，统一管理多个 AI 服务提供商，提供 OpenAI 兼容接口。
 
 ## ✨ 功能特性
