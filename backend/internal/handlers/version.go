@@ -47,13 +47,13 @@ func getLatestVersion() string {
 	resp, err := client.Get("https://api.github.com/repos/starared/vte/releases/latest")
 	if err != nil {
 		log.Printf("[WARN] 检查更新失败: %v", err)
-		return currentVersion
+		return "" // 返回空字符串表示获取失败
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		log.Printf("[WARN] 检查更新失败: HTTP %d", resp.StatusCode)
-		return currentVersion
+		return ""
 	}
 
 	var result struct {
@@ -62,7 +62,7 @@ func getLatestVersion() string {
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		log.Printf("[WARN] 解析版本信息失败: %v", err)
-		return currentVersion
+		return ""
 	}
 
 	// 移除 'v' 前缀
