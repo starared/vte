@@ -12,7 +12,7 @@ A lightweight, self-hosted API gateway that unifies multiple AI service provider
 - 🔄 **Stream Control** - Force streaming or non-streaming mode globally
 - 🏷️ **Model Prefixes** - Organize models by provider with custom prefixes
 - 🔐 **Secure** - Built-in authentication and API key management
-- 🚀 **Go Version Available** - Ultra-low memory (~10-20MB) Go backend option
+- ⚡ **Lightweight** - Built with Go, ultra-low memory usage (~10-20MB)
 
 ---
 
@@ -20,7 +20,12 @@ A lightweight, self-hosted API gateway that unifies multiple AI service provider
 
 **Simplest way:**
 ```bash
-docker run -d --name vte -p 8050:8050 -v vte-data:/app/data rtyedfty/vte
+docker run -d \
+  --name vte \
+  -p 8050:8050 \
+  -v vte-data:/app/data \
+  --restart unless-stopped \
+  rtyedfty/vte
 ```
 
 Then visit http://YOUR_IP:8050, default login: `admin` / `admin123`
@@ -44,8 +49,6 @@ docker run -d \
 | `-e ADMIN_PASSWORD=xxx` | Custom admin password | Optional |
 | `-e SECRET_KEY=xxx` | JWT secret key | Optional |
 | `--restart unless-stopped` | Auto restart | Recommended |
-
-> 💡 Go 版本内存占用仅 ~10-20MB，比 Python 版节省 80% 内存
 
 **Using docker-compose:**
 
@@ -254,7 +257,7 @@ Click "Fetch Models" to:
 |----------|-------------|---------|
 | `ADMIN_PASSWORD` | Admin account password | `admin123` |
 | `SECRET_KEY` | JWT secret key for authentication | Auto-generated |
-| `DATABASE_URL` | Database connection string | `sqlite:///./data/gateway.db` |
+| `DATABASE_PATH` | SQLite database file path | `./data/gateway.db` |
 
 ### Docker Volumes
 

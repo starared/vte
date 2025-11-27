@@ -14,12 +14,14 @@ RUN npm run build
 # ========== Go 后端构建 ==========
 FROM golang:1.21-alpine AS builder
 
+RUN apk add --no-cache gcc musl-dev
+
 WORKDIR /app/backend
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 
 COPY backend/ .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o vte .
+RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o vte .
 
 # ========== 最终镜像 ==========
 FROM alpine:latest

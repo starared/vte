@@ -19,7 +19,12 @@
 
 **最简单的方式：**
 ```bash
-docker run -d --name vte -p 8050:8050 rtyedfty/vte
+docker run -d \
+  --name vte \
+  -p 8050:8050 \
+  -v vte-data:/app/data \
+  --restart unless-stopped \
+  rtyedfty/vte
 ```
 
 然后访问 http://你的IP:8050，默认账号 `admin` / `admin123`
@@ -102,15 +107,6 @@ start.bat
 Linux/Mac：
 ```bash
 chmod +x start.sh && ./start.sh
-```
-
-**后续启动（已构建）：**
-
-直接运行后端即可：
-```bash
-cd backend
-./vte        # Linux/Mac
-.\vte.exe    # Windows
 ```
 
 **手动构建：**
@@ -212,7 +208,7 @@ print(response.choices[0].message.content)
 |------|------|--------|
 | `ADMIN_PASSWORD` | 管理员账号密码 | `admin123` |
 | `SECRET_KEY` | JWT 认证密钥 | 自动生成 |
-| `DATABASE_URL` | 数据库连接字符串 | `sqlite:///./data/gateway.db` |
+| `DATABASE_PATH` | SQLite 数据库文件路径 | `./data/gateway.db` |
 
 ### Docker 数据卷
 
