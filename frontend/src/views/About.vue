@@ -93,9 +93,26 @@ const currentVersion = ref('1.0.1')
 const latestVersion = ref('')
 const loading = ref(false)
 
+// 比较版本号大小
+function compareVersion(v1, v2) {
+  const parts1 = v1.split('.').map(Number)
+  const parts2 = v2.split('.').map(Number)
+  
+  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+    const num1 = parts1[i] || 0
+    const num2 = parts2[i] || 0
+    
+    if (num1 < num2) return -1
+    if (num1 > num2) return 1
+  }
+  
+  return 0
+}
+
 const hasUpdate = computed(() => {
   if (!latestVersion.value) return false
-  return latestVersion.value !== currentVersion.value
+  // 只有当最新版本大于当前版本时才显示有更新
+  return compareVersion(latestVersion.value, currentVersion.value) > 0
 })
 
 async function checkUpdate() {
