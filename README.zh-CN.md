@@ -26,7 +26,6 @@ docker run -d \
   --name vte \
   -p 8050:8050 \
   -v vte-data:/app/data \
-  -e TZ=Asia/Shanghai \
   --restart unless-stopped \
   rtyedfty/vte
 ```
@@ -51,6 +50,7 @@ docker run -d \
 | `-v vte-data:/app/data` | 数据持久化 | 建议 |
 | `-e ADMIN_PASSWORD=xxx` | 自定义管理员密码 | 可选 |
 | `-e SECRET_KEY=xxx` | JWT 密钥 | 可选 |
+| `-e TZ=Asia/Shanghai` | 时区设置（默认北京时间） | 可选 |
 | `--restart unless-stopped` | 自动重启 | 建议 |
 
 **使用 docker-compose：**

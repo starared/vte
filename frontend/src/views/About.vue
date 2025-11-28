@@ -41,7 +41,10 @@ docker pull rtyedfty/vte:latest
 docker stop vte && docker rm vte
 
 # 启动新容器（数据会保留）
-docker run -d --name vte -p 8050:8050 -v vte-data:/app/data --restart unless-stopped rtyedfty/vte:latest</pre>
+docker run -d --name vte -p 8050:8050 -v vte-data:/app/data --restart unless-stopped rtyedfty/vte:latest
+
+# 如需修改时区（默认为北京时间）
+# docker run -d --name vte -p 8050:8050 -v vte-data:/app/data -e TZ=你的时区 --restart unless-stopped rtyedfty/vte:latest</pre>
         
         <p style="margin-top: 16px"><strong>本地部署用户：</strong></p>
         <pre class="code"># 拉取最新代码
@@ -89,7 +92,7 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 
-const currentVersion = ref('1.0.1')
+const currentVersion = ref('1.0.3')
 const latestVersion = ref('')
 const loading = ref(false)
 

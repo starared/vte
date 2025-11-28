@@ -27,7 +27,6 @@ docker run -d \
   --name vte \
   -p 8050:8050 \
   -v vte-data:/app/data \
-  -e TZ=Asia/Shanghai \
   --restart unless-stopped \
   rtyedfty/vte
 ```

@@ -15,7 +15,6 @@ services:
       - vte-data:/app/data
     environment:
       - ADMIN_PASSWORD=admin123
-      - TZ=Asia/Shanghai
       # - SECRET_KEY=your-secret-key-here
     restart: unless-stopped
 
