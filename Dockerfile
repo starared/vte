@@ -46,6 +46,7 @@ RUN mkdir -p /app/data
 ENV DATABASE_PATH=/app/data/gateway.db
 ENV HOST=0.0.0.0
 ENV PORT=8050
+ENV TZ=Asia/Shanghai
 
 EXPOSE 8050
 

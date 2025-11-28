@@ -80,6 +80,17 @@ func createTables() error {
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS token_usage (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			model_name TEXT NOT NULL,
+			provider_name TEXT NOT NULL,
+			prompt_tokens INTEGER DEFAULT 0,
+			completion_tokens INTEGER DEFAULT 0,
+			total_tokens INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_token_usage_created_at ON token_usage(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_token_usage_model ON token_usage(model_name)`,
 	}
 
 	for _, schema := range schemas {

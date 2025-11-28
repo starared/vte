@@ -147,16 +147,46 @@ func OpenAIChatCompletions(c *gin.Context) {
 
 func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map[string]interface{}, modelName string, startTime time.Time) {
 	result, err := cfg.ChatCompletion(payload)
-	duration := time.Since(startTime).Milliseconds()
+	duration := time.Since(startTime).Seconds()
 
 	if err != nil {
-		logger.Error(fmt.Sprintf("%s | %s | %dms | %v", c.ClientIP(), modelName, duration, err))
+		logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), modelName, duration, err))
 		logger.RequestError()
 		c.JSON(500, gin.H{"detail": fmt.Sprintf("请求失败: %v", err)})
 		return
 	}
 
-	logger.Info(fmt.Sprintf("%s | %s | %dms", c.ClientIP(), modelName, duration))
+	// 记录token使用情况
+	if usage, ok := result["usage"].(map[string]interface{}); ok {
+		promptTokens := 0
+		completionTokens := 0
+		totalTokens := 0
+		
+		if pt, ok := usage["prompt_tokens"].(float64); ok {
+			promptTokens = int(pt)
+		}
+		if ct, ok := usage["completion_tokens"].(float64); ok {
+			completionTokens = int(ct)
+		}
+		if tt, ok := usage["total_tokens"].(float64); ok {
+			totalTokens = int(tt)
+		}
+		
+		// 获取provider名称
+		model, provider, _ := findModel(modelName)
+		providerName := "unknown"
+		if provider != nil {
+			providerName = provider.Name
+		}
+		displayName := modelName
+		if model != nil && model.DisplayName != "" {
+			displayName = model.DisplayName
+		}
+		
+		RecordTokenUsage(displayName, providerName, promptTokens, completionTokens, totalTokens)
+	}
+
+	logger.Info(fmt.Sprintf("%s | %s | %.2fs", c.ClientIP(), modelName, duration))
 	logger.RequestSuccess()
 	c.JSON(200, result)
 }
@@ -164,8 +194,8 @@ func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload 
 func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map[string]interface{}, modelName string, startTime time.Time) {
 	resp, err := cfg.ChatCompletionStream(payload)
 	if err != nil {
-		duration := time.Since(startTime).Milliseconds()
-		logger.Error(fmt.Sprintf("%s | %s | %dms | %v", c.ClientIP(), modelName, duration, err))
+		duration := time.Since(startTime).Seconds()
+		logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), modelName, duration, err))
 		logger.RequestError()
 		c.JSON(500, gin.H{"detail": fmt.Sprintf("请求失败: %v", err)})
 		return
@@ -174,8 +204,8 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		duration := time.Since(startTime).Milliseconds()
-		logger.Error(fmt.Sprintf("%s | %s | %dms | status %d: %s", c.ClientIP(), modelName, duration, resp.StatusCode, string(body)))
+		duration := time.Since(startTime).Seconds()
+		logger.Error(fmt.Sprintf("%s | %s | %.2fs | status %d: %s", c.ClientIP(), modelName, duration, resp.StatusCode, string(body)))
 		logger.RequestError()
 		c.JSON(resp.StatusCode, gin.H{"detail": string(body)})
 		return
@@ -186,20 +216,60 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
+	// 用于累积token统计
+	var totalPromptTokens, totalCompletionTokens, totalTotalTokens int
+	
 	c.Stream(func(w io.Writer) bool {
 		buf := make([]byte, 4096)
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
+			// 尝试解析SSE数据中的usage信息
+			data := string(buf[:n])
+			if strings.Contains(data, "\"usage\"") {
+				lines := strings.Split(data, "\n")
+				for _, line := range lines {
+					if strings.HasPrefix(line, "data: ") && !strings.Contains(line, "[DONE]") {
+						jsonData := strings.TrimPrefix(line, "data: ")
+						var chunk map[string]interface{}
+						if json.Unmarshal([]byte(jsonData), &chunk) == nil {
+							if usage, ok := chunk["usage"].(map[string]interface{}); ok {
+								if pt, ok := usage["prompt_tokens"].(float64); ok {
+									totalPromptTokens = int(pt)
+								}
+								if ct, ok := usage["completion_tokens"].(float64); ok {
+									totalCompletionTokens = int(ct)
+								}
+								if tt, ok := usage["total_tokens"].(float64); ok {
+									totalTotalTokens = int(tt)
+								}
+							}
+						}
+					}
+				}
+			}
 			w.Write(buf[:n])
 			return true
 		}
 		if err != nil {
-			duration := time.Since(startTime).Milliseconds()
+			duration := time.Since(startTime).Seconds()
 			if err == io.EOF {
-				logger.Info(fmt.Sprintf("%s | %s | %dms", c.ClientIP(), modelName, duration))
+				// 记录token使用情况
+				if totalTotalTokens > 0 {
+					model, provider, _ := findModel(modelName)
+					providerName := "unknown"
+					if provider != nil {
+						providerName = provider.Name
+					}
+					displayName := modelName
+					if model != nil && model.DisplayName != "" {
+						displayName = model.DisplayName
+					}
+					RecordTokenUsage(displayName, providerName, totalPromptTokens, totalCompletionTokens, totalTotalTokens)
+				}
+				logger.Info(fmt.Sprintf("%s | %s | %.2fs", c.ClientIP(), modelName, duration))
 				logger.RequestSuccess()
 			} else {
-				logger.Error(fmt.Sprintf("%s | %s | %dms | %v", c.ClientIP(), modelName, duration, err))
+				logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), modelName, duration, err))
 				logger.RequestError()
 			}
 			return false
@@ -419,8 +489,8 @@ func OpenAIChatCompletionsWS(c *gin.Context) {
 		// 发起流式请求
 		resp, err := cfg.ChatCompletionStream(payload)
 		if err != nil {
-			duration := time.Since(startTime).Milliseconds()
-			logger.Error(fmt.Sprintf("WebSocket | %s | %dms | %v", modelName, duration, err))
+			duration := time.Since(startTime).Seconds()
+			logger.Error(fmt.Sprintf("WebSocket | %s | %.2fs | %v", modelName, duration, err))
 			logger.RequestError()
 			conn.WriteJSON(gin.H{"error": fmt.Sprintf("请求失败: %v", err)})
 			continue
@@ -429,8 +499,8 @@ func OpenAIChatCompletionsWS(c *gin.Context) {
 		if resp.StatusCode != 200 {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			duration := time.Since(startTime).Milliseconds()
-			logger.Error(fmt.Sprintf("WebSocket | %s | %dms | status %d", modelName, duration, resp.StatusCode))
+			duration := time.Since(startTime).Seconds()
+			logger.Error(fmt.Sprintf("WebSocket | %s | %.2fs | status %d", modelName, duration, resp.StatusCode))
 			logger.RequestError()
 			conn.WriteJSON(gin.H{"error": string(body)})
 			continue
@@ -465,8 +535,8 @@ func OpenAIChatCompletionsWS(c *gin.Context) {
 		}
 		resp.Body.Close()
 
-		duration := time.Since(startTime).Milliseconds()
-		logger.Info(fmt.Sprintf("WebSocket | %s | %dms", modelName, duration))
+		duration := time.Since(startTime).Seconds()
+		logger.Info(fmt.Sprintf("WebSocket | %s | %.2fs", modelName, duration))
 		logger.RequestSuccess()
 	}
 }

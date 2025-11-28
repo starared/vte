@@ -13,6 +13,7 @@ A lightweight, self-hosted API gateway that unifies multiple AI service provider
 - 📋 **Real-time Logs** - Terminal-style logging for debugging
 - 🔄 **Stream Control** - Force streaming or non-streaming mode globally
 - 🏷️ **Model Prefixes** - Organize models by provider with custom prefixes
+- 📊 **Token Statistics** - Track daily token usage with hourly breakdown and request counts
 - 🔐 **Secure** - Built-in authentication and API key management
 - ⚡ **Lightweight** - Built with Go, ultra-low memory usage (~10-20MB)
 
@@ -26,6 +27,7 @@ docker run -d \
   --name vte \
   -p 8050:8050 \
   -v vte-data:/app/data \
+  -e TZ=Asia/Shanghai \
   --restart unless-stopped \
   rtyedfty/vte
 ```

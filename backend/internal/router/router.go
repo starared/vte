@@ -85,6 +85,13 @@ func Setup(cfg *config.Config) *gin.Engine {
 			logs.DELETE("/stats", handlers.ResetStats)
 		}
 
+		// Token统计
+		tokens := api.Group("/tokens", auth.JWTAuth(), auth.AdminRequired())
+		{
+			tokens.GET("/stats", handlers.GetTodayTokenStats)
+			tokens.DELETE("/stats", handlers.ResetTodayTokenStats)
+		}
+
 		// 设置
 		settings := api.Group("/settings", auth.JWTAuth(), auth.AdminRequired())
 		{

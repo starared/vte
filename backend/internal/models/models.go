@@ -103,3 +103,36 @@ type ChangeUsernameRequest struct {
 type StreamModeRequest struct {
 	Mode string `json:"mode" binding:"required"`
 }
+
+type TokenUsage struct {
+	ID               int       `json:"id"`
+	ModelName        string    `json:"model_name"`
+	ProviderName     string    `json:"provider_name"`
+	PromptTokens     int       `json:"prompt_tokens"`
+	CompletionTokens int       `json:"completion_tokens"`
+	TotalTokens      int       `json:"total_tokens"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+type TokenStats struct {
+	TotalTokens      int                `json:"total_tokens"`
+	PromptTokens     int                `json:"prompt_tokens"`
+	CompletionTokens int                `json:"completion_tokens"`
+	HourlyStats      []HourlyTokenStats `json:"hourly_stats"`
+	ModelStats       []ModelTokenStats  `json:"model_stats"`
+}
+
+type HourlyTokenStats struct {
+	Hour         int `json:"hour"`
+	TotalTokens  int `json:"total_tokens"`
+	RequestCount int `json:"request_count"`
+}
+
+type ModelTokenStats struct {
+	ModelName        string `json:"model_name"`
+	ProviderName     string `json:"provider_name"`
+	TotalTokens      int    `json:"total_tokens"`
+	PromptTokens     int    `json:"prompt_tokens"`
+	CompletionTokens int    `json:"completion_tokens"`
+	RequestCount     int    `json:"request_count"`
+}

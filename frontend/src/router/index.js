@@ -17,6 +17,7 @@ const routes = [
       { path: 'providers', name: 'Providers', component: () => import('../views/Providers.vue') },
       { path: 'models', name: 'Models', component: () => import('../views/Models.vue') },
       { path: 'logs', name: 'Logs', component: () => import('../views/Logs.vue') },
+      { path: 'token-stats', name: 'TokenStats', component: () => import('../views/TokenStats.vue') },
       { path: 'settings', name: 'Settings', component: () => import('../views/Settings.vue') },
       { path: 'about', name: 'About', component: () => import('../views/About.vue') }
     ]

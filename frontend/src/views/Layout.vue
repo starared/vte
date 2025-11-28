@@ -22,6 +22,10 @@
           <el-icon><Document /></el-icon>
           <span>请求日志</span>
         </el-menu-item>
+        <el-menu-item index="/token-stats">
+          <el-icon><TrendCharts /></el-icon>
+          <span>Token统计</span>
+        </el-menu-item>
         <el-menu-item index="/settings">
           <el-icon><Setting /></el-icon>
           <span>设置</span>
