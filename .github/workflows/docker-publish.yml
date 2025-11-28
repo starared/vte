@@ -30,6 +30,12 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Write version from tag
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "${GITHUB_REF#refs/tags/v}" > VERSION
+          fi
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5

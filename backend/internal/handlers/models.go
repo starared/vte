@@ -14,7 +14,7 @@ import (
 func ListAllModels(c *gin.Context) {
 	db := database.DB()
 
-	// 先同步所有模型的 display_name（根据提供商前缀自动生成）
+	// 同步所有模型的 display_name（根据提供商前缀自动生成）
 	db.Exec(`
 		UPDATE models SET display_name = 
 			CASE 
@@ -52,7 +52,11 @@ func ListAllModels(c *gin.Context) {
 }
 
 func UpdateModel(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(400, gin.H{"detail": "无效的模型ID"})
+		return
+	}
 
 	var req models.ModelUpdate
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -63,7 +67,7 @@ func UpdateModel(c *gin.Context) {
 	db := database.DB()
 
 	var displayName string
-	err := db.QueryRow("SELECT COALESCE(display_name, original_id) FROM models WHERE id = ?", id).Scan(&displayName)
+	err = db.QueryRow("SELECT COALESCE(display_name, original_id) FROM models WHERE id = ?", id).Scan(&displayName)
 	if err != nil {
 		c.JSON(404, gin.H{"detail": "模型不存在"})
 		return
@@ -88,11 +92,15 @@ func UpdateModel(c *gin.Context) {
 }
 
 func DeleteModel(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(400, gin.H{"detail": "无效的模型ID"})
+		return
+	}
 	db := database.DB()
 
 	var displayName string
-	err := db.QueryRow("SELECT COALESCE(display_name, original_id) FROM models WHERE id = ?", id).Scan(&displayName)
+	err = db.QueryRow("SELECT COALESCE(display_name, original_id) FROM models WHERE id = ?", id).Scan(&displayName)
 	if err != nil {
 		c.JSON(404, gin.H{"detail": "模型不存在"})
 		return

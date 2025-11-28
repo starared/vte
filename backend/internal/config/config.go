@@ -22,11 +22,16 @@ func Load() *Config {
 		Host:          getEnv("HOST", "0.0.0.0"),
 		Port:          getEnvInt("PORT", 8050),
 		DatabasePath:  getEnv("DATABASE_PATH", "./data/gateway.db"),
-		SecretKey:     getEnv("SECRET_KEY", generateSecretKey()),
+		SecretKey:     getEnv("SECRET_KEY", ""), // 如果为空，后续从数据库获取
 		AdminUsername: getEnv("ADMIN_USERNAME", "admin"),
 		AdminPassword: getEnv("ADMIN_PASSWORD", "admin123"),
 	}
 	return cfg
+}
+
+// SetSecretKey 设置 SecretKey（用于从数据库加载后更新）
+func (c *Config) SetSecretKey(key string) {
+	c.SecretKey = key
 }
 
 func (c *Config) Addr() string {

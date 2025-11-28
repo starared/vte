@@ -92,7 +92,11 @@ func CreateProvider(c *gin.Context) {
 }
 
 func UpdateProvider(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(400, gin.H{"detail": "无效的提供商ID"})
+		return
+	}
 
 	var req models.ProviderUpdate
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -105,7 +109,7 @@ func UpdateProvider(c *gin.Context) {
 	// 获取当前提供商信息
 	var oldPrefix, baseURL, proxyURL string
 	var name string
-	err := db.QueryRow("SELECT name, COALESCE(model_prefix, ''), base_url, COALESCE(proxy_url, '') FROM providers WHERE id = ?", id).
+	err = db.QueryRow("SELECT name, COALESCE(model_prefix, ''), base_url, COALESCE(proxy_url, '') FROM providers WHERE id = ?", id).
 		Scan(&name, &oldPrefix, &baseURL, &proxyURL)
 	if err != nil {
 		c.JSON(404, gin.H{"detail": "提供商不存在"})
@@ -212,11 +216,15 @@ func UpdateProvider(c *gin.Context) {
 }
 
 func DeleteProvider(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(400, gin.H{"detail": "无效的提供商ID"})
+		return
+	}
 	db := database.DB()
 
 	var name, baseURL, proxyURL string
-	err := db.QueryRow("SELECT name, base_url, COALESCE(proxy_url, '') FROM providers WHERE id = ?", id).
+	err = db.QueryRow("SELECT name, base_url, COALESCE(proxy_url, '') FROM providers WHERE id = ?", id).
 		Scan(&name, &baseURL, &proxyURL)
 	if err != nil {
 		c.JSON(404, gin.H{"detail": "提供商不存在"})
@@ -233,12 +241,16 @@ func DeleteProvider(c *gin.Context) {
 }
 
 func FetchModels(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(400, gin.H{"detail": "无效的提供商ID"})
+		return
+	}
 	db := database.DB()
 
 	var baseURL, apiKey, providerType, modelPrefix, proxyURL, name string
 	var extraHeaders *string
-	err := db.QueryRow(`
+	err = db.QueryRow(`
 		SELECT name, base_url, api_key, provider_type, model_prefix, 
 		       COALESCE(proxy_url, ''), extra_headers 
 		FROM providers WHERE id = ?
@@ -333,7 +345,11 @@ func FetchModels(c *gin.Context) {
 }
 
 func AddModel(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(400, gin.H{"detail": "无效的提供商ID"})
+		return
+	}
 
 	var req models.AddModelRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -344,7 +360,7 @@ func AddModel(c *gin.Context) {
 	db := database.DB()
 
 	var name, modelPrefix string
-	err := db.QueryRow("SELECT name, model_prefix FROM providers WHERE id = ?", id).Scan(&name, &modelPrefix)
+	err = db.QueryRow("SELECT name, model_prefix FROM providers WHERE id = ?", id).Scan(&name, &modelPrefix)
 	if err != nil {
 		c.JSON(404, gin.H{"detail": "提供商不存在"})
 		return
@@ -377,7 +393,11 @@ func AddModel(c *gin.Context) {
 }
 
 func ListProviderModels(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(400, gin.H{"detail": "无效的提供商ID"})
+		return
+	}
 	db := database.DB()
 
 	rows, err := db.Query(`

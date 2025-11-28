@@ -88,8 +88,8 @@
 
     <!-- 模型列表对话框 -->
     <el-dialog v-model="modelsDialogVisible" :title="`${currentProvider?.name} 的模型`" width="700px" :fullscreen="isMobile">
-      <div class="model-actions" v-if="currentProvider?.provider_type === 'vertex_express'">
-        <el-input v-model="newModelId" placeholder="输入模型 ID，如 gemini-2.5-pro" style="width: 300px" />
+      <div class="model-actions">
+        <el-input v-model="newModelId" placeholder="输入模型 ID，如 gpt-4o、gemini-2.5-pro" style="width: 300px" />
         <el-button type="primary" @click="addModel" style="margin-left: 12px">添加模型</el-button>
       </div>
       <el-table :data="providerModels" max-height="400">

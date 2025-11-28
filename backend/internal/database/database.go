@@ -4,8 +4,10 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "modernc.org/sqlite"
 	"golang.org/x/crypto/bcrypt"
@@ -86,6 +88,27 @@ func createTables() error {
 		}
 	}
 	return nil
+}
+
+// GetOrCreateSecretKey 获取或创建持久化的 SecretKey
+func GetOrCreateSecretKey() string {
+	var key string
+	err := db.QueryRow("SELECT value FROM settings WHERE key = 'secret_key'").Scan(&key)
+	if err == nil && key != "" {
+		return key
+	}
+
+	// 生成新的 SecretKey
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		key = "vte-fallback-secret-" + hex.EncodeToString([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))
+	} else {
+		key = hex.EncodeToString(b)
+	}
+
+	// 存储到数据库
+	db.Exec("INSERT INTO settings (key, value) VALUES ('secret_key', ?) ON CONFLICT(key) DO UPDATE SET value = ?", key, key)
+	return key
 }
 
 func EnsureAdmin(username, password string) error {

@@ -25,6 +25,12 @@ func main() {
 		log.Fatalf("Failed to ensure admin: %v", err)
 	}
 
+	// 如果没有通过环境变量设置 SecretKey，则从数据库获取或生成
+	if cfg.SecretKey == "" {
+		cfg.SetSecretKey(database.GetOrCreateSecretKey())
+		log.Printf("Using persisted SecretKey from database")
+	}
+
 	// 设置路由
 	r := router.Setup(cfg)
 
