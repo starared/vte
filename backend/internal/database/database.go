@@ -27,6 +27,16 @@ func Init(dbPath string) error {
 		return err
 	}
 
+	// SQLite 并发优化
+	db.SetMaxOpenConns(1) // SQLite 只支持单写入
+	db.SetMaxIdleConns(1)
+	
+	// 设置 PRAGMA 优化
+	db.Exec("PRAGMA busy_timeout=5000")    // 等待5秒而不是立即失败
+	db.Exec("PRAGMA synchronous=NORMAL")   // 提升性能
+	db.Exec("PRAGMA cache_size=10000")     // 增加缓存
+	db.Exec("PRAGMA temp_store=MEMORY")    // 临时表存内存
+
 	// 创建表
 	return createTables()
 }

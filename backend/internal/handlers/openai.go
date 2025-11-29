@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,21 @@ import (
 	"vte/internal/logger"
 	"vte/internal/proxy"
 )
+
+// getMaxRetries 从数据库获取最大重试次数
+func getMaxRetries() int {
+	db := database.DB()
+	var maxRetries string
+	err := db.QueryRow("SELECT value FROM settings WHERE key = 'max_retries'").Scan(&maxRetries)
+	if err != nil {
+		return 3 // 默认3次
+	}
+	retries, err := strconv.Atoi(maxRetries)
+	if err != nil {
+		return 3
+	}
+	return retries
+}
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
@@ -146,7 +162,8 @@ func OpenAIChatCompletions(c *gin.Context) {
 }
 
 func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map[string]interface{}, modelName string, startTime time.Time) {
-	result, err := cfg.ChatCompletion(payload)
+	maxRetries := getMaxRetries()
+	result, err := cfg.ChatCompletionWithRetry(payload, maxRetries)
 	duration := time.Since(startTime).Seconds()
 
 	if err != nil {
@@ -192,7 +209,8 @@ func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload 
 }
 
 func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map[string]interface{}, modelName string, startTime time.Time) {
-	resp, err := cfg.ChatCompletionStream(payload)
+	maxRetries := getMaxRetries()
+	resp, err := cfg.ChatCompletionStreamWithRetry(payload, maxRetries)
 	if err != nil {
 		duration := time.Since(startTime).Seconds()
 		logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), modelName, duration, err))

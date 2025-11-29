@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 	"path/filepath"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"vte/internal/auth"
@@ -41,6 +42,14 @@ func Setup(cfg *config.Config) *gin.Engine {
 
 	// 设置 JWT 密钥
 	auth.SetSecretKey(cfg.SecretKey)
+
+	// 健康检查端点（无需认证）
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"status": "ok",
+			"time":   time.Now().Format(time.RFC3339),
+		})
+	})
 
 	// API 路由
 	api := r.Group("/api")
@@ -97,6 +106,10 @@ func Setup(cfg *config.Config) *gin.Engine {
 		{
 			settings.GET("/stream-mode", handlers.GetStreamMode)
 			settings.PUT("/stream-mode", handlers.SetStreamMode)
+			settings.GET("/retry", handlers.GetRetrySettings)
+			settings.PUT("/retry", handlers.SetRetrySettings)
+			settings.GET("/theme", handlers.GetThemeSettings)
+			settings.PUT("/theme", handlers.SetThemeSettings)
 		}
 
 		// 版本

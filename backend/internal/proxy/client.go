@@ -157,50 +157,13 @@ func (cfg *ProviderConfig) ListModels() ([]map[string]interface{}, error) {
 	return result.Data, nil
 }
 
-// ChatCompletion 非流式请求
+// ChatCompletion 非流式请求（带重试）
 func (cfg *ProviderConfig) ChatCompletion(payload map[string]interface{}) (map[string]interface{}, error) {
-	client := getClient(cfg.ProxyURL)
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-
-	chatURL := cfg.getChatURL()
-	req, err := http.NewRequest("POST", chatURL, strings.NewReader(string(body)))
-	if err != nil {
-		return nil, err
-	}
-
-	for k, v := range cfg.getHeaders() {
-		req.Header.Set(k, v)
-	}
-
-	if params := cfg.getQueryParams(); len(params) > 0 {
-		req.URL.RawQuery = params.Encode()
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-
-	return result, nil
+	return cfg.ChatCompletionWithRetry(payload, 3) // 默认3次重试
 }
 
-// ChatCompletionStream 流式请求
-func (cfg *ProviderConfig) ChatCompletionStream(payload map[string]interface{}) (*http.Response, error) {
+// ChatCompletionWithRetry 带重试的非流式请求
+func (cfg *ProviderConfig) ChatCompletionWithRetry(payload map[string]interface{}, maxRetries int) (map[string]interface{}, error) {
 	client := getClient(cfg.ProxyURL)
 
 	body, err := json.Marshal(payload)
@@ -209,18 +172,111 @@ func (cfg *ProviderConfig) ChatCompletionStream(payload map[string]interface{}) 
 	}
 
 	chatURL := cfg.getChatURL()
-	req, err := http.NewRequest("POST", chatURL, strings.NewReader(string(body)))
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// 指数退避：100ms, 200ms, 400ms...
+			time.Sleep(time.Duration(100*(1<<(attempt-1))) * time.Millisecond)
+		}
+
+		req, err := http.NewRequest("POST", chatURL, strings.NewReader(string(body)))
+		if err != nil {
+			return nil, err
+		}
+
+		for k, v := range cfg.getHeaders() {
+			req.Header.Set(k, v)
+		}
+
+		if params := cfg.getQueryParams(); len(params) > 0 {
+			req.URL.RawQuery = params.Encode()
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue // 网络错误，重试
+		}
+
+		if resp.StatusCode == 200 {
+			defer resp.Body.Close()
+			var result map[string]interface{}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				resp.Body.Close()
+				return nil, err
+			}
+			return result, nil
+		}
+
+		// 5xx 错误重试，4xx 不重试
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		lastErr = fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
+
+		if resp.StatusCode < 500 {
+			return nil, lastErr // 4xx 错误不重试
+		}
+	}
+
+	return nil, fmt.Errorf("max retries exceeded: %v", lastErr)
+}
+
+// ChatCompletionStream 流式请求（带重试）
+func (cfg *ProviderConfig) ChatCompletionStream(payload map[string]interface{}) (*http.Response, error) {
+	return cfg.ChatCompletionStreamWithRetry(payload, 3) // 默认3次重试
+}
+
+// ChatCompletionStreamWithRetry 带重试的流式请求
+func (cfg *ProviderConfig) ChatCompletionStreamWithRetry(payload map[string]interface{}, maxRetries int) (*http.Response, error) {
+	client := getClient(cfg.ProxyURL)
+
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
 
-	for k, v := range cfg.getHeaders() {
-		req.Header.Set(k, v)
+	chatURL := cfg.getChatURL()
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// 指数退避
+			time.Sleep(time.Duration(100*(1<<(attempt-1))) * time.Millisecond)
+		}
+
+		req, err := http.NewRequest("POST", chatURL, strings.NewReader(string(body)))
+		if err != nil {
+			return nil, err
+		}
+
+		for k, v := range cfg.getHeaders() {
+			req.Header.Set(k, v)
+		}
+
+		if params := cfg.getQueryParams(); len(params) > 0 {
+			req.URL.RawQuery = params.Encode()
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue // 网络错误，重试
+		}
+
+		if resp.StatusCode == 200 {
+			return resp, nil
+		}
+
+		// 5xx 错误重试，4xx 不重试
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		lastErr = fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
+
+		if resp.StatusCode < 500 {
+			return nil, lastErr
+		}
 	}
 
-	if params := cfg.getQueryParams(); len(params) > 0 {
-		req.URL.RawQuery = params.Encode()
-	}
-
-	return client.Do(req)
+	return nil, fmt.Errorf("max retries exceeded: %v", lastErr)
 }

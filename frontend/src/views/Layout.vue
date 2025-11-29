@@ -5,7 +5,7 @@
     
     <el-aside :width="sidebarWidth" :class="{ 'mobile-open': sidebarOpen }">
       <div class="logo">VTE</div>
-      <el-menu :default-active="route.path" router background-color="#304156" text-color="#bfcbd9" active-text-color="#409EFF" @select="handleMenuSelect">
+      <el-menu :default-active="route.path" router :background-color="menuBgColor" text-color="#bfcbd9" active-text-color="#409EFF" @select="handleMenuSelect">
         <el-menu-item index="/dashboard">
           <el-icon><DataAnalysis /></el-icon>
           <span>仪表盘</span>
@@ -40,6 +40,15 @@
       <el-header>
         <el-icon class="menu-toggle" @click="sidebarOpen = !sidebarOpen"><Fold /></el-icon>
         <div class="header-right">
+          <el-tooltip :content="themeTooltip" placement="bottom">
+            <el-button text circle @click="themeStore.toggleTheme">
+              <el-icon :size="18">
+                <Sunny v-if="themeStore.theme === 'light'" />
+                <Moon v-else-if="themeStore.theme === 'dark'" />
+                <Monitor v-else />
+              </el-icon>
+            </el-button>
+          </el-tooltip>
           <span class="username">{{ userStore.user?.username }}</span>
           <el-button text @click="handleLogout">退出</el-button>
         </div>
@@ -55,14 +64,27 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
+import { useThemeStore } from '../stores/theme'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+const themeStore = useThemeStore()
 const sidebarOpen = ref(false)
 const isMobile = ref(false)
 
 const sidebarWidth = computed(() => isMobile.value ? '200px' : '200px')
+
+const menuBgColor = computed(() => {
+  return themeStore.theme === 'dark' || 
+    (themeStore.theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+    ? '#1d1e1f' : '#304156'
+})
+
+const themeTooltip = computed(() => {
+  const labels = { light: '亮色模式', dark: '暗色模式', auto: '跟随系统' }
+  return labels[themeStore.theme]
+})
 
 function checkMobile() {
   isMobile.value = window.innerWidth < 768
@@ -81,6 +103,7 @@ function handleLogout() {
 onMounted(() => {
   checkMobile()
   window.addEventListener('resize', checkMobile)
+  themeStore.loadTheme()
 })
 
 onUnmounted(() => {
@@ -93,8 +116,8 @@ onUnmounted(() => {
   min-height: 100vh;
 }
 .el-aside {
-  background: #304156;
-  transition: transform 0.3s;
+  background: var(--vte-sidebar-bg);
+  transition: transform 0.3s, background-color 0.3s;
 }
 .logo {
   height: 60px;
@@ -105,21 +128,23 @@ onUnmounted(() => {
   font-weight: bold;
 }
 .el-header {
-  background: #fff;
+  background: var(--vte-header-bg);
   display: flex;
   align-items: center;
   justify-content: space-between;
   box-shadow: 0 1px 4px rgba(0,0,0,0.08);
   padding: 0 16px;
+  transition: background-color 0.3s;
 }
 .header-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 .el-main {
-  background: #f5f7fa;
+  background: var(--el-bg-color-page);
   padding: 20px;
+  transition: background-color 0.3s;
 }
 .menu-toggle {
   display: none;
@@ -161,6 +186,9 @@ onUnmounted(() => {
   }
   .username {
     display: none;
+  }
+  .header-right {
+    gap: 4px;
   }
 }
 </style>

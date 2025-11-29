@@ -104,6 +104,14 @@ type StreamModeRequest struct {
 	Mode string `json:"mode" binding:"required"`
 }
 
+type RetrySettingsRequest struct {
+	MaxRetries int `json:"max_retries"`
+}
+
+type ThemeSettingsRequest struct {
+	Theme string `json:"theme" binding:"required"`
+}
+
 type TokenUsage struct {
 	ID               int       `json:"id"`
 	ModelName        string    `json:"model_name"`

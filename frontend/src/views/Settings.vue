@@ -3,6 +3,20 @@
     <h2>设置</h2>
 
     <el-card class="section">
+      <template #header>外观设置</template>
+      
+      <el-form label-width="120px">
+        <el-form-item label="主题模式">
+          <el-radio-group v-model="themeMode" @change="updateTheme">
+            <el-radio value="light">亮色</el-radio>
+            <el-radio value="dark">暗色</el-radio>
+            <el-radio value="auto">跟随系统</el-radio>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+    </el-card>
+
+    <el-card class="section">
       <template #header>API 设置</template>
       
       <el-form label-width="120px">
@@ -15,6 +29,11 @@
         </el-form-item>
         <el-form-item>
           <span class="hint-text">自动：根据客户端请求的 stream 参数决定；强制模式会覆盖客户端设置</span>
+        </el-form-item>
+        
+        <el-form-item label="最大重试次数">
+          <el-input-number v-model="maxRetries" :min="0" :max="10" @change="updateRetrySettings" />
+          <span class="hint-text" style="margin-left: 12px">API 请求失败时的重试次数（0-10）</span>
         </el-form-item>
       </el-form>
     </el-card>
@@ -71,30 +90,53 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useUserStore } from '../stores/user'
+import { useThemeStore } from '../stores/theme'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 
 const userStore = useUserStore()
+const themeStore = useThemeStore()
 const saving = ref(false)
 const username = ref(userStore.user?.username || '')
 const oldPassword = ref('')
 const newPassword = ref('')
 const streamMode = ref('auto')
+const maxRetries = ref(3)
+const themeMode = ref(themeStore.theme)
 const showApiKey = ref(false)
 
 onMounted(async () => {
   try {
-    const res = await api.get('/api/settings/stream-mode')
-    streamMode.value = res.data.mode
+    const [streamRes, retryRes] = await Promise.all([
+      api.get('/api/settings/stream-mode'),
+      api.get('/api/settings/retry')
+    ])
+    streamMode.value = streamRes.data.mode
+    maxRetries.value = retryRes.data.max_retries
+    themeMode.value = themeStore.theme
   } catch (e) {
-    console.error('获取流式模式设置失败', e)
+    console.error('获取设置失败', e)
   }
 })
+
+async function updateTheme(theme) {
+  themeStore.setTheme(theme)
+  ElMessage.success('主题已更新')
+}
 
 async function updateStreamMode(mode) {
   try {
     await api.put('/api/settings/stream-mode', { mode })
     ElMessage.success('流式模式已更新')
+  } catch (e) {
+    ElMessage.error('更新失败')
+  }
+}
+
+async function updateRetrySettings(value) {
+  try {
+    await api.put('/api/settings/retry', { max_retries: value })
+    ElMessage.success('重试设置已更新')
   } catch (e) {
     ElMessage.error('更新失败')
   }

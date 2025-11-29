@@ -3,7 +3,6 @@
     <div class="header">
       <h2>VTE 日志</h2>
       <div>
-        <el-switch v-model="autoRefresh" active-text="自动刷新" style="margin-right: 12px" />
         <el-button @click="loadLogs" :loading="loading">刷新</el-button>
         <el-button type="danger" @click="clearLogs">清空</el-button>
       </div>
@@ -51,7 +50,6 @@ import api from '../api'
 const loading = ref(false)
 const logs = ref([])
 const stats = ref({ total_requests: 0, success_requests: 0, error_requests: 0 })
-const autoRefresh = ref(true)
 const terminalRef = ref(null)
 let timer = null
 
@@ -112,14 +110,9 @@ function stopAutoRefresh() {
   }
 }
 
-watch(autoRefresh, (val) => {
-  if (val) startAutoRefresh()
-  else stopAutoRefresh()
-})
-
 onMounted(() => {
   loadLogs()
-  if (autoRefresh.value) startAutoRefresh()
+  startAutoRefresh()
 })
 
 onUnmounted(() => {
@@ -137,7 +130,7 @@ onUnmounted(() => {
   gap: 12px;
 }
 .terminal {
-  background: #1e1e1e;
+  background: var(--vte-terminal-bg);
   color: #d4d4d4;
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
   font-size: 13px;
@@ -156,13 +149,13 @@ onUnmounted(() => {
 .log-line.debug { color: #909399; }
 .log-line.info { color: #67c23a; }
 .empty {
-  color: #606266;
+  color: var(--el-text-color-secondary);
   text-align: center;
   padding: 40px;
 }
 .tip {
   margin-top: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 13px;
 }
 .stats-row {
@@ -173,7 +166,7 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 .stat-card {
-  background: #fff;
+  background: var(--el-bg-color);
   border-radius: 8px;
   padding: 12px 20px;
   text-align: center;
@@ -185,11 +178,11 @@ onUnmounted(() => {
 .stat-value {
   font-size: 24px;
   font-weight: 600;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 .stat-label {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-top: 4px;
 }
 

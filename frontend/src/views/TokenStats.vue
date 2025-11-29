@@ -3,7 +3,6 @@
     <div class="header">
       <h2>Token 消耗统计</h2>
       <div>
-        <el-switch v-model="autoRefresh" active-text="自动刷新" style="margin-right: 12px" />
         <el-button @click="loadStats" :loading="loading">刷新</el-button>
         <el-button type="danger" @click="resetStats">重置今日统计</el-button>
       </div>
@@ -73,13 +72,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as echarts from 'echarts'
 import api from '../api'
 
 const loading = ref(false)
-const autoRefresh = ref(true)
 const hourlyChartRef = ref(null)
 let hourlyChart = null
 let timer = null
@@ -141,7 +139,7 @@ function renderHourlyChart() {
     reorderedData.push(data)
   }
 
-  const hours = reorderedData.map(h => `${h.hour}:00`)
+  const times = reorderedData.map(h => `${h.hour}:00`)
   const tokens = reorderedData.map(h => h.total_tokens)
   const requests = reorderedData.map(h => h.request_count)
 
@@ -168,7 +166,7 @@ function renderHourlyChart() {
     },
     xAxis: {
       type: 'category',
-      data: hours,
+      data: times,
       boundaryGap: false
     },
     yAxis: [
@@ -243,7 +241,7 @@ function renderHourlyChart() {
 
 function startAutoRefresh() {
   if (timer) clearInterval(timer)
-  timer = setInterval(loadStats, 30000) // 每30秒刷新
+  timer = setInterval(loadStats, 10000) // 每10秒刷新
 }
 
 function stopAutoRefresh() {
@@ -253,14 +251,9 @@ function stopAutoRefresh() {
   }
 }
 
-watch(autoRefresh, (val) => {
-  if (val) startAutoRefresh()
-  else stopAutoRefresh()
-})
-
 onMounted(() => {
   loadStats()
-  if (autoRefresh.value) startAutoRefresh()
+  startAutoRefresh()
   
   // 监听窗口大小变化
   window.addEventListener('resize', () => {
@@ -297,7 +290,7 @@ onUnmounted(() => {
 .stat-card {
   flex: 1;
   min-width: 150px;
-  background: #fff;
+  background: var(--el-bg-color);
   border-radius: 8px;
   padding: 20px;
   text-align: center;
@@ -310,13 +303,13 @@ onUnmounted(() => {
 .stat-value {
   font-size: 32px;
   font-weight: 600;
-  color: #303133;
+  color: var(--el-text-color-primary);
   margin-bottom: 8px;
 }
 
 .stat-label {
   font-size: 14px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 
 .chart-card, .table-card {
@@ -331,19 +324,19 @@ onUnmounted(() => {
 
 .subtitle {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-weight: normal;
 }
 
 .empty {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   text-align: center;
   padding: 40px;
 }
 
 .tip {
   margin-top: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 13px;
   text-align: center;
 }

@@ -97,9 +97,10 @@ onMounted(loadStats)
 .stats { margin-bottom: 20px; }
 .api-info { margin-bottom: 20px; }
 .api-key-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.tip { margin-top: 16px; color: #909399; font-size: 14px; }
+.tip { margin-top: 16px; color: var(--el-text-color-secondary); font-size: 14px; }
 .code {
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-primary);
   padding: 16px;
   border-radius: 4px;
   overflow-x: auto;
