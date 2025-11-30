@@ -116,6 +116,15 @@ func OpenAIChatCompletions(c *gin.Context) {
 		payload["stream"] = false
 	}
 
+	// 如果是流式请求，添加 stream_options 以获取 usage 信息
+	if stream {
+		if _, exists := payload["stream_options"]; !exists {
+			payload["stream_options"] = map[string]interface{}{
+				"include_usage": true,
+			}
+		}
+	}
+
 	// 查找模型
 	model, provider, err := findModel(modelName)
 	if err != nil {
@@ -236,13 +245,27 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 
 	// 用于累积token统计
 	var totalPromptTokens, totalCompletionTokens, totalTotalTokens int
+	// 用于估算token（当API不返回usage时的备选方案）
+	var estimatedInputTokens, estimatedOutputTokens int
+	
+	// 从请求中估算输入token数（粗略估算：每4个字符约1个token）
+	if messages, ok := payload["messages"].([]interface{}); ok {
+		for _, msg := range messages {
+			if m, ok := msg.(map[string]interface{}); ok {
+				if content, ok := m["content"].(string); ok {
+					estimatedInputTokens += len(content) / 4
+				}
+			}
+		}
+	}
 	
 	c.Stream(func(w io.Writer) bool {
 		buf := make([]byte, 4096)
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
-			// 尝试解析SSE数据中的usage信息
 			data := string(buf[:n])
+			
+			// 尝试解析SSE数据中的usage信息
 			if strings.Contains(data, "\"usage\"") {
 				lines := strings.Split(data, "\n")
 				for _, line := range lines {
@@ -265,25 +288,62 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 					}
 				}
 			}
+			
+			// 估算输出token（从流式内容中提取）
+			lines := strings.Split(data, "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "data: ") && !strings.Contains(line, "[DONE]") {
+					jsonData := strings.TrimPrefix(line, "data: ")
+					var chunk map[string]interface{}
+					if json.Unmarshal([]byte(jsonData), &chunk) == nil {
+						if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+							if choice, ok := choices[0].(map[string]interface{}); ok {
+								if delta, ok := choice["delta"].(map[string]interface{}); ok {
+									if content, ok := delta["content"].(string); ok {
+										estimatedOutputTokens += len(content) / 4
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			
 			w.Write(buf[:n])
 			return true
 		}
 		if err != nil {
 			duration := time.Since(startTime).Seconds()
 			if err == io.EOF {
+				// 获取模型和提供商信息
+				model, provider, _ := findModel(modelName)
+				providerName := "unknown"
+				if provider != nil {
+					providerName = provider.Name
+				}
+				displayName := modelName
+				if model != nil && model.DisplayName != "" {
+					displayName = model.DisplayName
+				}
+				
 				// 记录token使用情况
 				if totalTotalTokens > 0 {
-					model, provider, _ := findModel(modelName)
-					providerName := "unknown"
-					if provider != nil {
-						providerName = provider.Name
-					}
-					displayName := modelName
-					if model != nil && model.DisplayName != "" {
-						displayName = model.DisplayName
-					}
+					// API返回了准确的usage信息
 					RecordTokenUsage(displayName, providerName, totalPromptTokens, totalCompletionTokens, totalTotalTokens)
+				} else if estimatedInputTokens > 0 || estimatedOutputTokens > 0 {
+					// API没有返回usage，使用估算值（标记为估算）
+					// 确保至少有1个token
+					if estimatedInputTokens == 0 {
+						estimatedInputTokens = 1
+					}
+					if estimatedOutputTokens == 0 {
+						estimatedOutputTokens = 1
+					}
+					estimatedTotal := estimatedInputTokens + estimatedOutputTokens
+					RecordTokenUsage(displayName, providerName, estimatedInputTokens, estimatedOutputTokens, estimatedTotal)
+					logger.Info(fmt.Sprintf("%s | %s | Token估算: ~%d (API未返回usage)", c.ClientIP(), modelName, estimatedTotal))
 				}
+				
 				logger.Info(fmt.Sprintf("%s | %s | %.2fs", c.ClientIP(), modelName, duration))
 				logger.RequestSuccess()
 			} else {
