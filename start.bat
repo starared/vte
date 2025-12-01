@@ -101,7 +101,7 @@ if not exist "dist\index.html" (
         echo.
         echo 解决方案：
         echo   1. 删除 node_modules 目录后重试
-        echo   2. 确保 Node.js 版本 ^>= 18
+        echo   2. 确保 Node.js 版本 18 或更高
         echo   3. 查看 TROUBLESHOOTING.zh-CN.md 获取更多帮助
         echo.
         cd ..
