@@ -27,11 +27,7 @@ func GetBeijingTime() time.Time {
 
 // Start 启动定时任务
 func Start() {
-	go func() {
-		// 延迟启动，确保主服务先启动
-		time.Sleep(2 * time.Second)
-		dailyCleanupTask()
-	}()
+	go dailyCleanupTask()
 }
 
 // dailyCleanupTask 每天北京时间下午3点清理旧记录
