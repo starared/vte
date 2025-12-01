@@ -131,6 +131,25 @@ chmod +x start.sh && ./start.sh
 - 构建前端和后端
 - 启动服务
 
+### Windows 用户注意事项 ⚠️
+
+**首次运行遇到问题？**
+
+1. **闪退问题**：如果双击 `start.bat` 后窗口闪退，请：
+   - 先运行 `diagnose.bat` 检查环境
+   - 或在命令行中运行以查看错误信息
+
+2. **在命令行中运行（推荐）**：
+   ```cmd
+   # 按 Win+R，输入 cmd，回车
+   # 进入项目目录
+   cd /d D:\path\to\vte
+   # 运行启动脚本
+   start.bat
+   ```
+
+3. **查看详细故障排除**：参见 [TROUBLESHOOTING.zh-CN.md](TROUBLESHOOTING.zh-CN.md)
+
 **停止服务：** 按 `Ctrl+C` 或直接关闭窗口
 
 **手动构建：**
