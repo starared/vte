@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -141,13 +142,15 @@ func migrateAddMissingColumns() {
 // migrateProviderAPIKeys 将 providers 表中的 api_key 迁移到 provider_api_keys 表
 func migrateProviderAPIKeys() {
 	// 查找所有有 api_key 但在 provider_api_keys 表中没有记录的提供商
+	// 注意：不查询 created_at 字段，避免时间格式兼容性问题
 	rows, err := db.Query(`
-		SELECT p.id, p.api_key, p.created_at 
+		SELECT p.id, p.api_key 
 		FROM providers p 
 		WHERE p.api_key != '' AND p.api_key IS NOT NULL
 		AND NOT EXISTS (SELECT 1 FROM provider_api_keys pk WHERE pk.provider_id = p.id)
 	`)
 	if err != nil {
+		log.Printf("Migration query failed: %v", err)
 		return
 	}
 	defer rows.Close()
@@ -155,16 +158,19 @@ func migrateProviderAPIKeys() {
 	for rows.Next() {
 		var providerID int
 		var apiKey string
-		var createdAt time.Time
-		if err := rows.Scan(&providerID, &apiKey, &createdAt); err != nil {
+		if err := rows.Scan(&providerID, &apiKey); err != nil {
+			log.Printf("Migration scan failed: %v", err)
 			continue
 		}
 
-		// 插入到 provider_api_keys 表
-		db.Exec(`
-			INSERT INTO provider_api_keys (provider_id, api_key, name, is_active, created_at)
-			VALUES (?, ?, '密钥 1', 1, ?)
-		`, providerID, apiKey, createdAt)
+		// 插入到 provider_api_keys 表，使用数据库默认的 CURRENT_TIMESTAMP
+		_, err := db.Exec(`
+			INSERT INTO provider_api_keys (provider_id, api_key, name, is_active)
+			VALUES (?, ?, '密钥 1', 1)
+		`, providerID, apiKey)
+		if err != nil {
+			log.Printf("Migration insert failed: %v", err)
+		}
 	}
 }
 
