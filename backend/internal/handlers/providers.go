@@ -269,6 +269,13 @@ func FetchModels(c *gin.Context) {
 		return
 	}
 
+	// 如果 providers 表的 api_key 为空，尝试从轮询密钥获取
+	if apiKey == "" {
+		if rotatedKey, _, err := GetNextAPIKey(id); err == nil && rotatedKey != "" {
+			apiKey = rotatedKey
+		}
+	}
+
 	cfg := &proxy.ProviderConfig{
 		BaseURL:      baseURL,
 		APIKey:       apiKey,
