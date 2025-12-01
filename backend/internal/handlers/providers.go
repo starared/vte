@@ -193,25 +193,16 @@ func UpdateProvider(c *gin.Context) {
 		}
 	}
 
-	// 如果前缀改变，更新所有模型的 display_name
+	// 如果前缀改变，批量更新所有模型的 display_name
 	if req.ModelPrefix != nil {
 		newPrefix := *req.ModelPrefix
-		// 只要前缀字段被提交，就同步更新所有模型
 		if newPrefix != oldPrefix {
-			rows, err := db.Query("SELECT id, original_id FROM models WHERE provider_id = ?", id)
-			if err == nil {
-				for rows.Next() {
-					var modelID int
-					var originalID string
-					rows.Scan(&modelID, &originalID)
-
-					displayName := originalID
-					if newPrefix != "" {
-						displayName = newPrefix + "/" + originalID
-					}
-					db.Exec("UPDATE models SET display_name = ? WHERE id = ?", displayName, modelID)
-				}
-				rows.Close()
+			if newPrefix != "" {
+				// 有前缀：display_name = prefix/original_id
+				db.Exec("UPDATE models SET display_name = ? || '/' || original_id WHERE provider_id = ?", newPrefix, id)
+			} else {
+				// 无前缀：display_name = original_id
+				db.Exec("UPDATE models SET display_name = original_id WHERE provider_id = ?", id)
 			}
 			logger.Info(fmt.Sprintf("%s | 同步前缀 | %s | %s -> %s", c.ClientIP(), name, oldPrefix, newPrefix))
 		}

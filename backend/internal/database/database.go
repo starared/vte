@@ -32,7 +32,7 @@ func Init(dbPath string) error {
 	db.SetMaxIdleConns(1)
 	
 	// 设置 PRAGMA 优化
-	db.Exec("PRAGMA busy_timeout=5000")    // 等待5秒而不是立即失败
+	db.Exec("PRAGMA busy_timeout=30000")   // 等待30秒而不是立即失败
 	db.Exec("PRAGMA synchronous=NORMAL")   // 提升性能
 	db.Exec("PRAGMA cache_size=10000")     // 增加缓存
 	db.Exec("PRAGMA temp_store=MEMORY")    // 临时表存内存
