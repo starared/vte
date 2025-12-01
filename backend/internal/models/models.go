@@ -27,6 +27,36 @@ type Provider struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
+// ProviderAPIKey 提供商的多密钥支持
+type ProviderAPIKey struct {
+	ID         int        `json:"id"`
+	ProviderID int        `json:"provider_id"`
+	APIKey     string     `json:"api_key,omitempty"`
+	Name       string     `json:"name"`
+	IsActive   bool       `json:"is_active"`
+	UsageCount int        `json:"usage_count"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
+// APIKeyCreate 创建密钥请求
+type APIKeyCreate struct {
+	APIKey string `json:"api_key" binding:"required"`
+	Name   string `json:"name"`
+}
+
+// APIKeyUpdate 更新密钥请求
+type APIKeyUpdate struct {
+	Name     *string `json:"name"`
+	IsActive *bool   `json:"is_active"`
+}
+
+// TestConnectionRequest 测试连接请求
+type TestConnectionRequest struct {
+	ModelID  *int `json:"model_id"`
+	APIKeyID *int `json:"api_key_id"`
+}
+
 type Model struct {
 	ID           int    `json:"id"`
 	ProviderID   int    `json:"provider_id"`

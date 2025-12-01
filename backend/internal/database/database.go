@@ -90,6 +90,18 @@ func createTables() error {
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS provider_api_keys (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider_id INTEGER NOT NULL,
+			api_key TEXT NOT NULL,
+			name TEXT DEFAULT '',
+			is_active INTEGER DEFAULT 1,
+			usage_count INTEGER DEFAULT 0,
+			last_used_at DATETIME,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (provider_id) REFERENCES providers(id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_provider_api_keys_provider ON provider_api_keys(provider_id)`,
 		`CREATE TABLE IF NOT EXISTS token_usage (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			model_name TEXT NOT NULL,
@@ -108,7 +120,52 @@ func createTables() error {
 			return err
 		}
 	}
+
+	// 迁移：添加缺失的列
+	migrateAddMissingColumns()
+
+	// 迁移：将 providers 表中的 api_key 迁移到 provider_api_keys 表
+	migrateProviderAPIKeys()
+
 	return nil
+}
+
+// migrateAddMissingColumns 添加缺失的列
+func migrateAddMissingColumns() {
+	// 检查并添加 usage_count 列
+	db.Exec("ALTER TABLE provider_api_keys ADD COLUMN usage_count INTEGER DEFAULT 0")
+	// 检查并添加 last_used_at 列
+	db.Exec("ALTER TABLE provider_api_keys ADD COLUMN last_used_at DATETIME")
+}
+
+// migrateProviderAPIKeys 将 providers 表中的 api_key 迁移到 provider_api_keys 表
+func migrateProviderAPIKeys() {
+	// 查找所有有 api_key 但在 provider_api_keys 表中没有记录的提供商
+	rows, err := db.Query(`
+		SELECT p.id, p.api_key, p.created_at 
+		FROM providers p 
+		WHERE p.api_key != '' AND p.api_key IS NOT NULL
+		AND NOT EXISTS (SELECT 1 FROM provider_api_keys pk WHERE pk.provider_id = p.id)
+	`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var providerID int
+		var apiKey string
+		var createdAt time.Time
+		if err := rows.Scan(&providerID, &apiKey, &createdAt); err != nil {
+			continue
+		}
+
+		// 插入到 provider_api_keys 表
+		db.Exec(`
+			INSERT INTO provider_api_keys (provider_id, api_key, name, is_active, created_at)
+			VALUES (?, ?, '密钥 1', 1, ?)
+		`, providerID, apiKey, createdAt)
+	}
 }
 
 // GetOrCreateSecretKey 获取或创建持久化的 SecretKey

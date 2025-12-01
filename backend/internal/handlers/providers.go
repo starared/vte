@@ -68,7 +68,7 @@ func CreateProvider(c *gin.Context) {
 		INSERT INTO providers (name, base_url, api_key, model_prefix, provider_type, 
 		                       vertex_project, vertex_location, extra_headers, proxy_url)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, req.Name, req.BaseURL, req.APIKey, req.ModelPrefix, req.ProviderType,
+	`, req.Name, req.BaseURL, "", req.ModelPrefix, req.ProviderType,
 		req.VertexProject, req.VertexLocation, req.ExtraHeaders, req.ProxyURL)
 
 	if err != nil {
@@ -77,6 +77,15 @@ func CreateProvider(c *gin.Context) {
 	}
 
 	id, _ := result.LastInsertId()
+
+	// 将 API Key 添加到 provider_api_keys 表
+	if req.APIKey != "" {
+		db.Exec(`
+			INSERT INTO provider_api_keys (provider_id, api_key, name)
+			VALUES (?, ?, ?)
+		`, id, req.APIKey, "密钥 1")
+	}
+
 	logger.Info(fmt.Sprintf("%s | 添加提供商 | %s", c.ClientIP(), req.Name))
 
 	c.JSON(200, gin.H{

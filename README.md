@@ -340,7 +340,13 @@ vte/
 
 ## 📝 Changelog
 
-### Latest Version
+### v1.0.5
+- ✅ **Multi API Key Support** - Add multiple API keys per provider with round-robin rotation
+- ✅ **Connection Test** - Test provider connectivity with specific model and API key
+- ✅ **Key Management** - Manage API keys directly in provider edit dialog
+- ✅ **Usage Statistics** - Track usage count and last used time for each API key
+
+### Previous Versions
 - ✅ CORS support for cross-origin requests
 - ✅ WebSocket support (`/v1/chat/completions/ws`)
 - ✅ Auto-sync model prefixes when switching to Models page

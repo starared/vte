@@ -74,6 +74,14 @@ func Setup(cfg *config.Config) *gin.Engine {
 			providers.POST("/:id/fetch-models", handlers.FetchModels)
 			providers.POST("/:id/add-model", handlers.AddModel)
 			providers.GET("/:id/models", handlers.ListProviderModels)
+			// API Keys 轮询管理
+			providers.GET("/:id/api-keys", handlers.ListAPIKeys)
+			providers.POST("/:id/api-keys", handlers.AddAPIKey)
+			providers.PUT("/:id/api-keys/:keyId", handlers.UpdateAPIKey)
+			providers.DELETE("/:id/api-keys/:keyId", handlers.DeleteAPIKey)
+			// 测试连接
+			providers.POST("/:id/test", handlers.TestConnection)
+			providers.GET("/:id/test-options", handlers.GetTestOptions)
 		}
 
 		// 模型管理

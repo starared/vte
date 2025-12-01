@@ -396,6 +396,10 @@ func findModel(modelName string) (*modelInfo, *providerInfo, error) {
 
 	model, provider, err := scanModelProvider(row)
 	if err == nil {
+		// 获取轮询密钥
+		if rotatedKey, _, err := GetNextAPIKey(provider.ID); err == nil && rotatedKey != "" {
+			provider.APIKey = rotatedKey
+		}
 		return model, provider, nil
 	}
 
@@ -412,6 +416,10 @@ func findModel(modelName string) (*modelInfo, *providerInfo, error) {
 
 	model, provider, err = scanModelProvider(row)
 	if err == nil {
+		// 获取轮询密钥
+		if rotatedKey, _, err := GetNextAPIKey(provider.ID); err == nil && rotatedKey != "" {
+			provider.APIKey = rotatedKey
+		}
 		return model, provider, nil
 	}
 
@@ -432,6 +440,10 @@ func findModel(modelName string) (*modelInfo, *providerInfo, error) {
 
 				model, provider, err = scanModelProvider(row)
 				if err == nil {
+					// 获取轮询密钥
+					if rotatedKey, _, err := GetNextAPIKey(provider.ID); err == nil && rotatedKey != "" {
+						provider.APIKey = rotatedKey
+					}
 					return model, provider, nil
 				}
 				break
