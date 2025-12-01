@@ -41,9 +41,6 @@ func main() {
 		log.Printf("Using persisted SecretKey from database")
 	}
 
-	// 启动定时任务
-	scheduler.Start()
-
 	// 设置路由
 	r := router.Setup(cfg)
 
@@ -64,6 +61,10 @@ func main() {
 	}
 
 	log.Printf("VTE started on %s:%d", cfg.Host, cfg.Port)
+	
+	// 启动定时任务
+	scheduler.Start()
+	
 	if err := r.Run(cfg.Addr()); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
