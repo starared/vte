@@ -90,6 +90,7 @@ func Setup(cfg *config.Config) *gin.Engine {
 			models.GET("", handlers.ListAllModels)
 			models.PUT("/:id", handlers.UpdateModel)
 			models.DELETE("/:id", handlers.DeleteModel)
+			models.POST("/:id/reset-name", handlers.ResetModelDisplayName)
 			models.POST("/batch-toggle", handlers.BatchToggleModels)
 		}
 

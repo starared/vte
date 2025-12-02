@@ -47,7 +47,7 @@ func GetTodayTokenStats(c *gin.Context) {
 	todayStartBeijing := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, beijingLoc)
 	todayStartUTC := todayStartBeijing.UTC().Format("2006-01-02 15:04:05")
 	
-	// 查询今天的总统计
+	// 查询今天的总统计（24小时）
 	var stats models.TokenStats
 	err := db.QueryRow(`
 		SELECT 
@@ -63,44 +63,66 @@ func GetTodayTokenStats(c *gin.Context) {
 		return
 	}
 	
-	// 查询每小时的统计（将UTC时间转换为北京时间显示）
+	// 获取当前北京时间的小时和分钟
+	currentHour := now.Hour()
+	currentMinute := now.Minute()
+	// 计算当前时段（20分钟一个时段：0-19, 20-39, 40-59）
+	currentSlot := currentHour*3 + currentMinute/20
+	
+	// 查询今天所有的统计数据（按 20 分钟分组）
 	rows, err := db.Query(`
 		SELECT 
 			CAST(strftime('%H', datetime(created_at, '+8 hours')) AS INTEGER) as hour,
+			CAST(strftime('%M', datetime(created_at, '+8 hours')) AS INTEGER) / 20 as minute_slot,
 			COALESCE(SUM(total_tokens), 0) as total_tokens,
 			COUNT(*) as request_count
 		FROM token_usage
 		WHERE created_at >= ?
-		GROUP BY hour
-		ORDER BY hour
+		GROUP BY hour, minute_slot
+		ORDER BY hour, minute_slot
 	`, todayStartUTC)
 	
 	if err != nil {
-		c.JSON(500, gin.H{"detail": "查询小时统计失败"})
+		c.JSON(500, gin.H{"detail": "查询时段统计失败"})
 		return
 	}
 	defer rows.Close()
 	
-	type hourlyData struct {
+	// 用 slot 标识（hour*3 + minute_slot）作为 key
+	type slotData struct {
 		tokens   int
 		requests int
 	}
-	hourlyMap := make(map[int]hourlyData)
+	slotMap := make(map[int]slotData)
 	for rows.Next() {
-		var hour, tokens, requests int
-		rows.Scan(&hour, &tokens, &requests)
-		hourlyMap[hour] = hourlyData{tokens: tokens, requests: requests}
+		var hour, minuteSlot, tokens, requests int
+		rows.Scan(&hour, &minuteSlot, &tokens, &requests)
+		slotKey := hour*3 + minuteSlot
+		slotMap[slotKey] = slotData{tokens: tokens, requests: requests}
 	}
 	
-	// 填充24小时数据
-	stats.HourlyStats = make([]models.HourlyTokenStats, 24)
-	for i := 0; i < 24; i++ {
-		data := hourlyMap[i]
-		stats.HourlyStats[i] = models.HourlyTokenStats{
-			Hour:         i,
+	// 填充前后各8个时段的数据（共 17 个时段，约 5.5 小时）
+	stats.HourlyStats = make([]models.HourlyTokenStats, 0, 17)
+	for s := currentSlot - 8; s <= currentSlot + 8; s++ {
+		slot := s
+		// 处理跨天的情况
+		if slot < 0 {
+			slot += 72 // 24*3
+		} else if slot >= 72 {
+			slot -= 72
+		}
+		
+		data := slotMap[slot]
+		// 计算小时和分钟
+		hour := slot / 3
+		minuteSlot := slot % 3
+		minute := minuteSlot * 20
+		
+		stats.HourlyStats = append(stats.HourlyStats, models.HourlyTokenStats{
+			Hour:         hour*100 + minute, // 用 HHMM 格式表示，如 1420 表示 14:20
 			TotalTokens:  data.tokens,
 			RequestCount: data.requests,
-		}
+		})
 	}
 	
 	// 查询按模型分组的统计
@@ -132,7 +154,23 @@ func GetTodayTokenStats(c *gin.Context) {
 		stats.ModelStats = append(stats.ModelStats, ms)
 	}
 	
-	c.JSON(200, stats)
+	// 添加当前小时和重置时间信息
+	// 计算下次重置时间（北京时间15:00）
+	next3PM := time.Date(now.Year(), now.Month(), now.Day(), 15, 0, 0, 0, beijingLoc)
+	if now.After(next3PM) {
+		next3PM = next3PM.Add(24 * time.Hour)
+	}
+	
+	c.JSON(200, gin.H{
+		"total_tokens":      stats.TotalTokens,
+		"prompt_tokens":     stats.PromptTokens,
+		"completion_tokens": stats.CompletionTokens,
+		"hourly_stats":      stats.HourlyStats,
+		"model_stats":       stats.ModelStats,
+		"server_time":       now.Format("2006-01-02 15:04:05"),
+		"next_reset_time":   next3PM.Format("2006-01-02 15:04:05"),
+		"timezone":          "Asia/Shanghai (UTC+8)",
+	})
 }
 
 // CleanOldTokenRecords 清理旧的token记录（只保留今天的，基于北京时间）

@@ -82,6 +82,7 @@ func createTables() error {
 			provider_id INTEGER NOT NULL,
 			original_id TEXT NOT NULL,
 			display_name TEXT,
+			custom_name INTEGER DEFAULT 0,
 			is_active INTEGER DEFAULT 1,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (provider_id) REFERENCES providers(id)
@@ -136,6 +137,8 @@ func migrateAddMissingColumns() {
 	db.Exec("ALTER TABLE provider_api_keys ADD COLUMN usage_count INTEGER DEFAULT 0")
 	// 检查并添加 last_used_at 列
 	db.Exec("ALTER TABLE provider_api_keys ADD COLUMN last_used_at DATETIME")
+	// 检查并添加 custom_name 列（用于标记用户自定义的模型显示名称）
+	db.Exec("ALTER TABLE models ADD COLUMN custom_name INTEGER DEFAULT 0")
 }
 
 // migrateProviderAPIKeys 将 providers 表中的 api_key 迁移到 provider_api_keys 表

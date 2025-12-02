@@ -14,7 +14,7 @@ import (
 func ListAllModels(c *gin.Context) {
 	db := database.DB()
 
-	// 同步所有模型的 display_name（根据提供商前缀自动生成）
+	// 只同步非自定义名称的模型的 display_name（根据提供商前缀自动生成）
 	db.Exec(`
 		UPDATE models SET display_name = 
 			CASE 
@@ -22,10 +22,11 @@ func ListAllModels(c *gin.Context) {
 				THEN (SELECT model_prefix FROM providers WHERE id = models.provider_id) || '/' || original_id
 				ELSE original_id
 			END
+		WHERE custom_name = 0 OR custom_name IS NULL
 	`)
 
 	rows, err := db.Query(`
-		SELECT m.id, m.provider_id, p.name, m.original_id, m.display_name, m.is_active
+		SELECT m.id, m.provider_id, p.name, m.original_id, m.display_name, m.is_active, COALESCE(m.custom_name, 0)
 		FROM models m
 		JOIN providers p ON m.provider_id = p.id
 	`)
@@ -38,10 +39,11 @@ func ListAllModels(c *gin.Context) {
 	var result []models.Model
 	for rows.Next() {
 		var m models.Model
-		var isActive int
+		var isActive, customName int
 		var displayName *string
-		rows.Scan(&m.ID, &m.ProviderID, &m.ProviderName, &m.OriginalID, &displayName, &isActive)
+		rows.Scan(&m.ID, &m.ProviderID, &m.ProviderName, &m.OriginalID, &displayName, &isActive, &customName)
 		m.IsActive = isActive == 1
+		m.CustomName = customName == 1
 		if displayName != nil {
 			m.DisplayName = *displayName
 		}
@@ -73,7 +75,17 @@ func UpdateModel(c *gin.Context) {
 		return
 	}
 
-	// 只允许更新 is_active，display_name 由提供商前缀自动生成
+	// 更新 display_name（用户自定义名称）
+	if req.DisplayName != nil {
+		newDisplayName := *req.DisplayName
+		if newDisplayName != "" {
+			// 设置自定义名称
+			db.Exec("UPDATE models SET display_name = ?, custom_name = 1 WHERE id = ?", newDisplayName, id)
+			logger.Info(fmt.Sprintf("%s | 修改模型名称 | %s -> %s", c.ClientIP(), displayName, newDisplayName))
+		}
+	}
+
+	// 更新 is_active
 	if req.IsActive != nil {
 		active := 0
 		if *req.IsActive {
@@ -89,6 +101,42 @@ func UpdateModel(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{"message": "更新成功"})
+}
+
+// ResetModelDisplayName 重置模型显示名称为自动生成
+func ResetModelDisplayName(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(400, gin.H{"detail": "无效的模型ID"})
+		return
+	}
+
+	db := database.DB()
+
+	// 获取模型和提供商信息
+	var originalID, providerPrefix string
+	err = db.QueryRow(`
+		SELECT m.original_id, COALESCE(p.model_prefix, '')
+		FROM models m
+		JOIN providers p ON m.provider_id = p.id
+		WHERE m.id = ?
+	`, id).Scan(&originalID, &providerPrefix)
+	if err != nil {
+		c.JSON(404, gin.H{"detail": "模型不存在"})
+		return
+	}
+
+	// 生成自动名称
+	autoDisplayName := originalID
+	if providerPrefix != "" {
+		autoDisplayName = providerPrefix + "/" + originalID
+	}
+
+	// 重置为自动生成的名称
+	db.Exec("UPDATE models SET display_name = ?, custom_name = 0 WHERE id = ?", autoDisplayName, id)
+
+	logger.Info(fmt.Sprintf("%s | 重置模型名称 | %s", c.ClientIP(), autoDisplayName))
+	c.JSON(200, gin.H{"message": "重置成功", "display_name": autoDisplayName})
 }
 
 func DeleteModel(c *gin.Context) {

@@ -71,24 +71,10 @@
           </el-form-item>
         </template>
         
-        <el-form-item label="API Key" :required="!editingId">
-          <template v-if="editingId">
-            <div class="form-tip" style="margin-bottom: 8px">支持多密钥轮询，每次请求自动切换</div>
-            <div v-for="(key, idx) in editingKeys" :key="key.id" class="key-row">
-              <el-input v-model="key.name" placeholder="名称" style="width: 100px" size="small" @change="updateKeyName(key)" />
-              <el-input :value="key.api_key" readonly style="width: 200px; margin-left: 8px" size="small" />
-              <el-button size="small" type="danger" style="margin-left: 8px" @click="deleteEditingKey(key, idx)">删除</el-button>
-            </div>
-            <div class="key-row" style="margin-top: 8px">
-              <el-input v-model="newEditingKeyName" placeholder="名称（可选）" style="width: 100px" size="small" />
-              <el-input v-model="newEditingKey" placeholder="新密钥" style="width: 200px; margin-left: 8px" size="small" />
-              <el-button size="small" type="primary" style="margin-left: 8px" @click="addEditingKey">添加</el-button>
-            </div>
-          </template>
-          <template v-else>
-            <el-input v-model="form.api_key" type="password" show-password 
-              :placeholder="form.provider_type === 'vertex_express' ? 'Vertex Express API Key' : 'API Key'" />
-          </template>
+        <el-form-item v-if="!editingId" label="API Key" required>
+          <el-input v-model="form.api_key" type="password" show-password 
+            :placeholder="form.provider_type === 'vertex_express' ? 'Vertex Express API Key' : 'API Key'" />
+          <div class="form-tip">添加后可在「密钥管理」中管理多个密钥</div>
         </el-form-item>
         <el-form-item label="代理地址">
           <el-input v-model="form.proxy_url" placeholder="可选，如: http://127.0.0.1:7890" />
@@ -137,7 +123,16 @@
       </div>
       <el-table :data="providerAPIKeys" max-height="400" empty-text="暂无密钥，请添加">
         <el-table-column prop="name" label="名称" width="120" />
-        <el-table-column prop="api_key" label="密钥" width="150" show-overflow-tooltip />
+        <el-table-column prop="api_key" label="密钥" width="200">
+          <template #default="{ row }">
+            <div class="key-display">
+              <span>{{ keyVisibility[row.id] ? row.api_key : maskKey(row.api_key) }}</span>
+              <el-icon class="eye-icon" @click="toggleKeyVisibility(row.id)">
+                <component :is="keyVisibility[row.id] ? 'Hide' : 'View'" />
+              </el-icon>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="usage_count" label="使用次数" width="90" />
         <el-table-column prop="last_used_at" label="最后使用" width="160">
           <template #default="{ row }">
@@ -188,8 +183,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { View, Hide } from '@element-plus/icons-vue'
 import api from '../api'
 
 const loading = ref(false)
@@ -211,10 +207,18 @@ const testResult = ref(null)
 const testOptions = ref({ models: [], api_keys: [] })
 const testForm = ref({ modelId: null, apiKeyId: null })
 const isMobile = computed(() => window.innerWidth < 768)
-// 编辑时的密钥管理
-const editingKeys = ref([])
-const newEditingKey = ref('')
-const newEditingKeyName = ref('')
+
+// 密钥显示/隐藏控制
+const keyVisibility = reactive({})
+
+function maskKey(key) {
+  if (!key) return ''
+  return '••••••••••••••••'
+}
+
+function toggleKeyVisibility(keyId) {
+  keyVisibility[keyId] = !keyVisibility[keyId]
+}
 
 const form = ref({
   name: '',
@@ -251,15 +255,6 @@ function showAdd() {
 async function editProvider(row) {
   editingId.value = row.id
   form.value = { ...row, api_key: '' }
-  // 加载密钥列表
-  try {
-    const res = await api.get(`/api/providers/${row.id}/api-keys`)
-    editingKeys.value = res.data || []
-  } catch {
-    editingKeys.value = []
-  }
-  newEditingKey.value = ''
-  newEditingKeyName.value = ''
   dialogVisible.value = true
 }
 
@@ -353,41 +348,6 @@ async function viewAPIKeys(row) {
     ElMessage.error('获取密钥列表失败')
     console.error(e)
   }
-}
-
-// 编辑提供商时的密钥管理
-async function addEditingKey() {
-  if (!newEditingKey.value) {
-    ElMessage.warning('请输入密钥')
-    return
-  }
-  try {
-    await api.post(`/api/providers/${editingId.value}/api-keys`, {
-      api_key: newEditingKey.value,
-      name: newEditingKeyName.value
-    })
-    // 刷新密钥列表
-    const res = await api.get(`/api/providers/${editingId.value}/api-keys`)
-    editingKeys.value = res.data || []
-    newEditingKey.value = ''
-    newEditingKeyName.value = ''
-    ElMessage.success('添加成功')
-  } catch {}
-}
-
-async function deleteEditingKey(key, idx) {
-  await ElMessageBox.confirm('确定删除该密钥？', '确认')
-  try {
-    await api.delete(`/api/providers/${editingId.value}/api-keys/${key.id}`)
-    editingKeys.value.splice(idx, 1)
-    ElMessage.success('删除成功')
-  } catch {}
-}
-
-async function updateKeyName(key) {
-  try {
-    await api.put(`/api/providers/${editingId.value}/api-keys/${key.id}`, { name: key.name })
-  } catch {}
 }
 
 async function addAPIKey() {
@@ -486,6 +446,25 @@ onMounted(loadProviders)
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.key-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.key-display span {
+  font-family: monospace;
+  font-size: 13px;
+}
+.eye-icon {
+  cursor: pointer;
+  color: var(--el-text-color-secondary);
+  font-size: 16px;
+  transition: color 0.2s;
+}
+.eye-icon:hover {
+  color: var(--el-color-primary);
 }
 
 .test-result {

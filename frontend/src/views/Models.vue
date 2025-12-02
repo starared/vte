@@ -23,19 +23,24 @@
     <el-table :data="pagedModels" v-loading="loading" stripe @selection-change="handleSelect">
       <el-table-column type="selection" width="50" />
       <el-table-column prop="provider_name" label="提供商" width="120" />
-      <el-table-column prop="original_id" label="模型 ID" min-width="250" />
-      <el-table-column prop="display_name" label="显示名称（自动生成）" min-width="200">
+      <el-table-column prop="original_id" label="原始模型 ID" min-width="200" />
+      <el-table-column prop="display_name" label="显示名称" min-width="200">
         <template #default="{ row }">
-          <span>{{ row.display_name || row.original_id }}</span>
+          <div class="display-name-cell">
+            <span>{{ row.display_name || row.original_id }}</span>
+            <el-tag v-if="row.custom_name" size="small" type="warning" class="custom-tag">自定义</el-tag>
+          </div>
         </template>
       </el-table-column>
-      <el-table-column prop="is_active" label="状态" width="100">
+      <el-table-column prop="is_active" label="状态" width="80">
         <template #default="{ row }">
-          <el-switch v-model="row.is_active" @change="updateModel(row)" />
+          <el-switch v-model="row.is_active" @change="updateModelStatus(row)" />
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="100">
+      <el-table-column label="操作" width="180">
         <template #default="{ row }">
+          <el-button size="small" type="primary" text @click="openEditDialog(row)">编辑名称</el-button>
+          <el-button v-if="row.custom_name" size="small" type="warning" text @click="resetDisplayName(row)">重置</el-button>
           <el-button size="small" type="danger" text @click="deleteModel(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -52,6 +57,27 @@
         @size-change="currentPage = 1"
       />
     </div>
+
+    <!-- 编辑显示名称对话框 -->
+    <el-dialog v-model="editDialogVisible" title="编辑显示名称" width="500px">
+      <el-form label-width="100px">
+        <el-form-item label="原始模型ID">
+          <el-input :model-value="editingModel?.original_id" disabled />
+        </el-form-item>
+        <el-form-item label="显示名称">
+          <el-input v-model="editDisplayName" placeholder="输入自定义显示名称" />
+        </el-form-item>
+        <el-form-item>
+          <el-text type="info" size="small">
+            提示：用户通过 API 请求时使用此显示名称，实际转发时使用原始模型 ID
+          </el-text>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveDisplayName" :loading="saving">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -68,6 +94,12 @@ const filterProvider = ref('')
 const filterStatus = ref(null)
 const currentPage = ref(1)
 const pageSize = ref(20)
+
+// 编辑对话框
+const editDialogVisible = ref(false)
+const editingModel = ref(null)
+const editDisplayName = ref('')
+const saving = ref(false)
 
 const providerOptions = computed(() => {
   const set = new Set(models.value.map(m => m.provider_name))
@@ -103,11 +135,45 @@ function handleSelect(rows) {
   selectedIds.value = rows.map(r => r.id)
 }
 
-async function updateModel(row) {
+async function updateModelStatus(row) {
   await api.put(`/api/models/${row.id}`, {
-    display_name: row.display_name,
     is_active: row.is_active
   })
+}
+
+function openEditDialog(row) {
+  editingModel.value = row
+  editDisplayName.value = row.display_name || row.original_id
+  editDialogVisible.value = true
+}
+
+async function saveDisplayName() {
+  if (!editDisplayName.value.trim()) {
+    ElMessage.warning('显示名称不能为空')
+    return
+  }
+  saving.value = true
+  try {
+    await api.put(`/api/models/${editingModel.value.id}`, {
+      display_name: editDisplayName.value.trim()
+    })
+    ElMessage.success('保存成功')
+    editDialogVisible.value = false
+    loadModels()
+  } finally {
+    saving.value = false
+  }
+}
+
+async function resetDisplayName(row) {
+  await ElMessageBox.confirm('确定重置为自动生成的名称？', '确认')
+  try {
+    const res = await api.post(`/api/models/${row.id}/reset-name`)
+    ElMessage.success('重置成功')
+    loadModels()
+  } catch (e) {
+    ElMessage.error('重置失败')
+  }
 }
 
 async function deleteModel(row) {
@@ -150,6 +216,14 @@ onActivated(loadModels)  // 页面激活时自动刷新
   margin-top: 16px;
   display: flex;
   justify-content: flex-end;
+}
+.display-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.custom-tag {
+  flex-shrink: 0;
 }
 
 @media (max-width: 768px) {

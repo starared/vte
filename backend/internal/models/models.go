@@ -63,6 +63,7 @@ type Model struct {
 	ProviderName string `json:"provider_name,omitempty"`
 	OriginalID   string `json:"original_id"`
 	DisplayName  string `json:"display_name"`
+	CustomName   bool   `json:"custom_name"`
 	IsActive     bool   `json:"is_active"`
 }
 

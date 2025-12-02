@@ -193,16 +193,16 @@ func UpdateProvider(c *gin.Context) {
 		}
 	}
 
-	// 如果前缀改变，批量更新所有模型的 display_name
+	// 如果前缀改变，批量更新非自定义名称的模型的 display_name
 	if req.ModelPrefix != nil {
 		newPrefix := *req.ModelPrefix
 		if newPrefix != oldPrefix {
 			if newPrefix != "" {
-				// 有前缀：display_name = prefix/original_id
-				db.Exec("UPDATE models SET display_name = ? || '/' || original_id WHERE provider_id = ?", newPrefix, id)
+				// 有前缀：display_name = prefix/original_id（只更新非自定义名称的模型）
+				db.Exec("UPDATE models SET display_name = ? || '/' || original_id WHERE provider_id = ? AND (custom_name = 0 OR custom_name IS NULL)", newPrefix, id)
 			} else {
-				// 无前缀：display_name = original_id
-				db.Exec("UPDATE models SET display_name = original_id WHERE provider_id = ?", id)
+				// 无前缀：display_name = original_id（只更新非自定义名称的模型）
+				db.Exec("UPDATE models SET display_name = original_id WHERE provider_id = ? AND (custom_name = 0 OR custom_name IS NULL)", id)
 			}
 			logger.Info(fmt.Sprintf("%s | 同步前缀 | %s | %s -> %s", c.ClientIP(), name, oldPrefix, newPrefix))
 		}
@@ -287,12 +287,15 @@ func FetchModels(c *gin.Context) {
 
 	// 获取现有模型
 	existingModels := make(map[string]int)
-	rows, _ := db.Query("SELECT id, original_id FROM models WHERE provider_id = ?", id)
+	customNameModels := make(map[string]bool) // 标记哪些模型有自定义名称
+	rows, _ := db.Query("SELECT id, original_id, COALESCE(custom_name, 0) FROM models WHERE provider_id = ?", id)
 	for rows.Next() {
 		var modelID int
 		var originalID string
-		rows.Scan(&modelID, &originalID)
+		var customName int
+		rows.Scan(&modelID, &originalID, &customName)
 		existingModels[originalID] = modelID
+		customNameModels[originalID] = customName == 1
 	}
 	rows.Close()
 
@@ -312,14 +315,16 @@ func FetchModels(c *gin.Context) {
 		}
 
 		if existingID, exists := existingModels[modelID]; exists {
-			// 更新
-			db.Exec("UPDATE models SET display_name = ? WHERE id = ?", displayName, existingID)
+			// 更新：只有非自定义名称的模型才更新 display_name
+			if !customNameModels[modelID] {
+				db.Exec("UPDATE models SET display_name = ? WHERE id = ?", displayName, existingID)
+			}
 			updated++
 		} else {
 			// 新增
 			db.Exec(`
-				INSERT INTO models (provider_id, original_id, display_name, is_active) 
-				VALUES (?, ?, ?, 0)
+				INSERT INTO models (provider_id, original_id, display_name, custom_name, is_active) 
+				VALUES (?, ?, ?, 0, 0)
 			`, id, modelID, displayName)
 			added++
 		}
@@ -387,8 +392,8 @@ func AddModel(c *gin.Context) {
 	}
 
 	_, err = db.Exec(`
-		INSERT INTO models (provider_id, original_id, display_name, is_active) 
-		VALUES (?, ?, ?, 1)
+		INSERT INTO models (provider_id, original_id, display_name, custom_name, is_active) 
+		VALUES (?, ?, ?, 0, 1)
 	`, id, req.ModelID, displayName)
 	if err != nil {
 		c.JSON(500, gin.H{"detail": "添加失败"})
@@ -408,7 +413,7 @@ func ListProviderModels(c *gin.Context) {
 	db := database.DB()
 
 	rows, err := db.Query(`
-		SELECT m.id, m.provider_id, p.name, m.original_id, m.display_name, m.is_active
+		SELECT m.id, m.provider_id, p.name, m.original_id, m.display_name, m.is_active, COALESCE(m.custom_name, 0)
 		FROM models m
 		JOIN providers p ON m.provider_id = p.id
 		WHERE m.provider_id = ?
@@ -422,10 +427,11 @@ func ListProviderModels(c *gin.Context) {
 	var result []models.Model
 	for rows.Next() {
 		var m models.Model
-		var isActive int
+		var isActive, customName int
 		var displayName *string
-		rows.Scan(&m.ID, &m.ProviderID, &m.ProviderName, &m.OriginalID, &displayName, &isActive)
+		rows.Scan(&m.ID, &m.ProviderID, &m.ProviderName, &m.OriginalID, &displayName, &isActive, &customName)
 		m.IsActive = isActive == 1
+		m.CustomName = customName == 1
 		if displayName != nil {
 			m.DisplayName = *displayName
 		}

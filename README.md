@@ -13,7 +13,8 @@ A lightweight, self-hosted API gateway that unifies multiple AI service provider
 - 📋 **Real-time Logs** - Terminal-style logging for debugging
 - 🔄 **Stream Control** - Force streaming or non-streaming mode globally
 - 🏷️ **Model Prefixes** - Organize models by provider with custom prefixes
-- 📊 **Token Statistics** - Track daily token usage with hourly breakdown and request counts
+- ✏️ **Model Aliases** - Custom display names for models (shows B to users, uses A internally)
+- 📊 **Token Statistics** - Track daily token usage with 20-minute granular breakdown and request counts
 - 🔐 **Secure** - Built-in authentication and API key management
 - ⚡ **Lightweight** - Built with Go, ultra-low memory usage (~10-20MB)
 

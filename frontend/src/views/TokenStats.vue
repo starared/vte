@@ -12,24 +12,24 @@
     <div class="stats-row">
       <div class="stat-card">
         <div class="stat-value">{{ formatNumber(stats.total_tokens) }}</div>
-        <div class="stat-label">总Token</div>
+        <div class="stat-label">今日总Token</div>
       </div>
       <div class="stat-card prompt">
         <div class="stat-value">{{ formatNumber(stats.prompt_tokens) }}</div>
-        <div class="stat-label">输入Token</div>
+        <div class="stat-label">今日输入Token</div>
       </div>
       <div class="stat-card completion">
         <div class="stat-value">{{ formatNumber(stats.completion_tokens) }}</div>
-        <div class="stat-label">输出Token</div>
+        <div class="stat-label">今日输出Token</div>
       </div>
     </div>
 
-    <!-- 24小时趋势图 -->
+    <!-- 趋势图（以当前时间为中心，前后约 2.5 小时，每 20 分钟一个点） -->
     <el-card class="chart-card">
       <template #header>
         <div class="card-header">
-          <span>24小时Token消耗趋势</span>
-          <span class="subtitle">每天下午3点自动刷新</span>
+          <span>Token消耗趋势</span>
+          <span class="subtitle">服务器: {{ stats.server_time || '--' }} | 下次重置: {{ stats.next_reset_time || '--' }}</span>
         </div>
       </template>
       <div ref="hourlyChartRef" style="height: 300px"></div>
@@ -38,7 +38,7 @@
     <!-- 模型使用统计 -->
     <el-card class="table-card">
       <template #header>
-        <span>模型使用详情</span>
+        <span>模型使用详情（今日）</span>
       </template>
       <el-table :data="stats.model_stats" stripe>
         <el-table-column prop="model_name" label="模型名称" min-width="150" />
@@ -66,7 +66,7 @@
     </el-card>
 
     <div class="tip">
-      统计数据每天下午3点自动刷新，历史记录保留30天
+      统计数据基于北京时间（UTC+8），每天15:00自动清理前一天数据
     </div>
   </div>
 </template>
@@ -87,7 +87,10 @@ const stats = ref({
   prompt_tokens: 0,
   completion_tokens: 0,
   hourly_stats: [],
-  model_stats: []
+  model_stats: [],
+  server_time: '',
+  next_reset_time: '',
+  timezone: ''
 })
 
 function formatNumber(num) {
@@ -124,24 +127,17 @@ function renderHourlyChart() {
     hourlyChart = echarts.init(hourlyChartRef.value)
   }
 
-  // 重新排序：从15:00开始到第二天14:00
+  // 直接使用后端返回的数据（已经是以当前时间为中心的前后各8个时段）
   const hourlyData = stats.value.hourly_stats || []
-  const reorderedData = []
-  
-  // 从15点到23点
-  for (let i = 15; i < 24; i++) {
-    const data = hourlyData.find(h => h.hour === i) || { hour: i, total_tokens: 0, request_count: 0 }
-    reorderedData.push(data)
-  }
-  // 从0点到14点
-  for (let i = 0; i < 15; i++) {
-    const data = hourlyData.find(h => h.hour === i) || { hour: i, total_tokens: 0, request_count: 0 }
-    reorderedData.push(data)
-  }
 
-  const times = reorderedData.map(h => `${h.hour}:00`)
-  const tokens = reorderedData.map(h => h.total_tokens)
-  const requests = reorderedData.map(h => h.request_count)
+  // 解析 HHMM 格式的时间，转换为显示标签
+  const times = hourlyData.map(h => {
+    const hour = Math.floor(h.hour / 100)
+    const minute = h.hour % 100
+    return `${hour}:${minute.toString().padStart(2, '0')}`
+  })
+  const tokens = hourlyData.map(h => h.total_tokens)
+  const requests = hourlyData.map(h => h.request_count)
 
   const option = {
     tooltip: {
@@ -149,7 +145,7 @@ function renderHourlyChart() {
       formatter: function(params) {
         let result = params[0].axisValue + '<br/>'
         params.forEach(item => {
-          result += item.marker + item.seriesName + ': ' + item.value + '<br/>'
+          result += item.marker + item.seriesName + ': ' + formatNumber(item.value) + '<br/>'
         })
         return result
       }

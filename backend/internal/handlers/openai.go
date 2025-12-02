@@ -243,17 +243,18 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
-	// 用于累积token统计
+	// 用于累积 token 统计
 	var totalPromptTokens, totalCompletionTokens, totalTotalTokens int
-	// 用于估算token（当API不返回usage时的备选方案）
-	var estimatedInputTokens, estimatedOutputTokens int
+	// 用于估算 token（当 API 不返回 usage 时的备选方案）
+	var estimatedOutputContent strings.Builder
 	
-	// 从请求中估算输入token数（粗略估算：每4个字符约1个token）
+	// 从请求中估算输入 token 数（粗略估算：英文每4字符约1 token，中文每字约1.5 token）
+	estimatedInputChars := 0
 	if messages, ok := payload["messages"].([]interface{}); ok {
 		for _, msg := range messages {
 			if m, ok := msg.(map[string]interface{}); ok {
 				if content, ok := m["content"].(string); ok {
-					estimatedInputTokens += len(content) / 4
+					estimatedInputChars += len(content)
 				}
 			}
 		}
@@ -289,7 +290,7 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 				}
 			}
 			
-			// 估算输出token（从流式内容中提取）
+			// 估算输出 token（从流式内容中提取）
 			lines := strings.Split(data, "\n")
 			for _, line := range lines {
 				if strings.HasPrefix(line, "data: ") && !strings.Contains(line, "[DONE]") {
@@ -300,7 +301,7 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 							if choice, ok := choices[0].(map[string]interface{}); ok {
 								if delta, ok := choice["delta"].(map[string]interface{}); ok {
 									if content, ok := delta["content"].(string); ok {
-										estimatedOutputTokens += len(content) / 4
+										estimatedOutputContent.WriteString(content)
 									}
 								}
 							}
@@ -330,18 +331,25 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 				if totalTotalTokens > 0 {
 					// API返回了准确的usage信息
 					RecordTokenUsage(displayName, providerName, totalPromptTokens, totalCompletionTokens, totalTotalTokens)
-				} else if estimatedInputTokens > 0 || estimatedOutputTokens > 0 {
-					// API没有返回usage，使用估算值（标记为估算）
-					// 确保至少有1个token
-					if estimatedInputTokens == 0 {
+					logger.Info(fmt.Sprintf("%s | %s | Token: %d (prompt=%d, completion=%d)", c.ClientIP(), modelName, totalTotalTokens, totalPromptTokens, totalCompletionTokens))
+				} else {
+					// API没有返回usage，使用估算值
+					// 估算方法：英文约4字符/token，中文约1.5字符/token，这里用3字符/token作为折中
+					estimatedInputTokens := estimatedInputChars / 3
+					if estimatedInputTokens < 1 && estimatedInputChars > 0 {
 						estimatedInputTokens = 1
 					}
-					if estimatedOutputTokens == 0 {
+					outputContent := estimatedOutputContent.String()
+					estimatedOutputTokens := len(outputContent) / 3
+					if estimatedOutputTokens < 1 && len(outputContent) > 0 {
 						estimatedOutputTokens = 1
 					}
-					estimatedTotal := estimatedInputTokens + estimatedOutputTokens
-					RecordTokenUsage(displayName, providerName, estimatedInputTokens, estimatedOutputTokens, estimatedTotal)
-					logger.Info(fmt.Sprintf("%s | %s | Token估算: ~%d (API未返回usage)", c.ClientIP(), modelName, estimatedTotal))
+					
+					if estimatedInputTokens > 0 || estimatedOutputTokens > 0 {
+						estimatedTotal := estimatedInputTokens + estimatedOutputTokens
+						RecordTokenUsage(displayName, providerName, estimatedInputTokens, estimatedOutputTokens, estimatedTotal)
+						logger.Info(fmt.Sprintf("%s | %s | Token估算: ~%d (API未返回usage)", c.ClientIP(), modelName, estimatedTotal))
+					}
 				}
 				
 				logger.Info(fmt.Sprintf("%s | %s | %.2fs", c.ClientIP(), modelName, duration))
@@ -598,6 +606,23 @@ func OpenAIChatCompletionsWS(c *gin.Context) {
 
 		// 流式转发响应
 		reader := bufio.NewReader(resp.Body)
+		
+		// Token 统计变量
+		var totalPromptTokens, totalCompletionTokens, totalTotalTokens int
+		var estimatedOutputContent strings.Builder
+		
+		// 估算输入 token
+		estimatedInputChars := 0
+		if messages, ok := payload["messages"].([]interface{}); ok {
+			for _, msg := range messages {
+				if m, ok := msg.(map[string]interface{}); ok {
+					if content, ok := m["content"].(string); ok {
+						estimatedInputChars += len(content)
+					}
+				}
+			}
+		}
+		
 		for {
 			line, err := reader.ReadBytes('\n')
 			if err != nil {
@@ -610,6 +635,36 @@ func OpenAIChatCompletionsWS(c *gin.Context) {
 			lineStr := strings.TrimSpace(string(line))
 			if lineStr == "" {
 				continue
+			}
+
+			// 解析 SSE 数据提取 token 信息
+			if strings.HasPrefix(lineStr, "data: ") && !strings.Contains(lineStr, "[DONE]") {
+				jsonData := strings.TrimPrefix(lineStr, "data: ")
+				var chunk map[string]interface{}
+				if json.Unmarshal([]byte(jsonData), &chunk) == nil {
+					// 提取 usage 信息
+					if usage, ok := chunk["usage"].(map[string]interface{}); ok {
+						if pt, ok := usage["prompt_tokens"].(float64); ok {
+							totalPromptTokens = int(pt)
+						}
+						if ct, ok := usage["completion_tokens"].(float64); ok {
+							totalCompletionTokens = int(ct)
+						}
+						if tt, ok := usage["total_tokens"].(float64); ok {
+							totalTotalTokens = int(tt)
+						}
+					}
+					// 累积输出内容用于估算
+					if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+						if choice, ok := choices[0].(map[string]interface{}); ok {
+							if delta, ok := choice["delta"].(map[string]interface{}); ok {
+								if content, ok := delta["content"].(string); ok {
+									estimatedOutputContent.WriteString(content)
+								}
+							}
+						}
+					}
+				}
 			}
 
 			// 发送 SSE 数据到 WebSocket
@@ -626,6 +681,38 @@ func OpenAIChatCompletionsWS(c *gin.Context) {
 		resp.Body.Close()
 
 		duration := time.Since(startTime).Seconds()
+		
+		// 记录 token 使用情况
+		displayName := modelName
+		if model != nil && model.DisplayName != "" {
+			displayName = model.DisplayName
+		}
+		providerName := "unknown"
+		if provider != nil {
+			providerName = provider.Name
+		}
+		
+		if totalTotalTokens > 0 {
+			RecordTokenUsage(displayName, providerName, totalPromptTokens, totalCompletionTokens, totalTotalTokens)
+			logger.Info(fmt.Sprintf("WebSocket | %s | Token: %d", modelName, totalTotalTokens))
+		} else {
+			// 使用估算值
+			estimatedInputTokens := estimatedInputChars / 3
+			if estimatedInputTokens < 1 && estimatedInputChars > 0 {
+				estimatedInputTokens = 1
+			}
+			outputContent := estimatedOutputContent.String()
+			estimatedOutputTokens := len(outputContent) / 3
+			if estimatedOutputTokens < 1 && len(outputContent) > 0 {
+				estimatedOutputTokens = 1
+			}
+			if estimatedInputTokens > 0 || estimatedOutputTokens > 0 {
+				estimatedTotal := estimatedInputTokens + estimatedOutputTokens
+				RecordTokenUsage(displayName, providerName, estimatedInputTokens, estimatedOutputTokens, estimatedTotal)
+				logger.Info(fmt.Sprintf("WebSocket | %s | Token估算: ~%d", modelName, estimatedTotal))
+			}
+		}
+		
 		logger.Info(fmt.Sprintf("WebSocket | %s | %.2fs", modelName, duration))
 		logger.RequestSuccess()
 	}
