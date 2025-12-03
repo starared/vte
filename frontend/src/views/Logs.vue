@@ -29,7 +29,7 @@
       <el-button size="small" text @click="resetStats">重置统计</el-button>
     </div>
 
-    <div class="terminal" ref="terminalRef">
+    <div class="terminal">
       <div v-for="(line, idx) in logs" :key="idx" class="log-line" :class="getLogClass(line)">
         {{ line }}
       </div>
@@ -43,14 +43,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 
 const loading = ref(false)
 const logs = ref([])
 const stats = ref({ total_requests: 0, success_requests: 0, error_requests: 0 })
-const terminalRef = ref(null)
 let timer = null
 
 const successRate = computed(() => {
@@ -67,11 +66,6 @@ async function loadLogs(showLoading = true) {
     ])
     logs.value = logsRes.data.logs || []
     stats.value = statsRes.data
-    nextTick(() => {
-      if (terminalRef.value) {
-        terminalRef.value.scrollTop = terminalRef.value.scrollHeight
-      }
-    })
   } finally {
     if (showLoading) loading.value = false
   }

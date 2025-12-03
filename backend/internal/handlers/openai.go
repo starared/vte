@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -17,6 +19,242 @@ import (
 	"vte/internal/logger"
 	"vte/internal/proxy"
 )
+
+// 并发控制
+var (
+	currentConcurrency int64          // 当前并发数
+	concurrencyMu      sync.RWMutex   // 并发设置锁
+)
+
+// 自定义并发控制 - 基于提供商/模型
+var (
+	customConcurrencyMu      sync.Mutex
+	customConcurrencyCurrent = make(map[string]int64) // key -> 当前并发数
+)
+
+// CustomConcurrencyRule 自定义并发限制规则
+type CustomConcurrencyRule struct {
+	ID           int    `json:"id"`
+	Name         string `json:"name"`           // 规则名称
+	ProviderID   int    `json:"provider_id"`    // 提供商ID，0表示所有
+	ProviderName string `json:"provider_name"`  // 提供商名称（仅显示用）
+	ModelName    string `json:"model_name"`     // 模型名称，空表示所有
+	Limit        int    `json:"limit"`          // 最大并发数
+	Enabled      bool   `json:"enabled"`        // 是否启用
+}
+
+// 速率限制 - 使用滑动窗口
+var (
+	rateLimitMu     sync.Mutex
+	requestTimes    []time.Time // 请求时间记录
+)
+
+// 自定义速率限制 - 基于提供商/模型
+var (
+	customRateLimitMu     sync.Mutex
+	customRequestTimes    = make(map[string][]time.Time) // key: "provider:xxx" 或 "model:xxx" 或 "provider:xxx:model:yyy"
+)
+
+// CustomRateLimitRule 自定义速率限制规则
+type CustomRateLimitRule struct {
+	ID           int    `json:"id"`
+	Name         string `json:"name"`           // 规则名称
+	ProviderID   int    `json:"provider_id"`    // 提供商ID，0表示所有
+	ProviderName string `json:"provider_name"`  // 提供商名称（仅显示用）
+	ModelName    string `json:"model_name"`     // 模型名称，空表示所有
+	MaxRequests  int    `json:"max_requests"`   // 最大请求数
+	Window       int    `json:"window"`         // 时间窗口（秒）
+	Enabled      bool   `json:"enabled"`        // 是否启用
+}
+
+// getRateLimitSettings 获取速率限制设置
+func getRateLimitSettings() (enabled bool, maxRequests int, windowSeconds int) {
+	db := database.DB()
+	var enabledStr, maxReqStr, windowStr string
+	
+	err := db.QueryRow("SELECT value FROM settings WHERE key = 'rate_limit_enabled'").Scan(&enabledStr)
+	if err != nil || enabledStr != "true" {
+		return false, 0, 0
+	}
+	
+	db.QueryRow("SELECT value FROM settings WHERE key = 'rate_limit_max_requests'").Scan(&maxReqStr)
+	db.QueryRow("SELECT value FROM settings WHERE key = 'rate_limit_window'").Scan(&windowStr)
+	
+	maxRequests, _ = strconv.Atoi(maxReqStr)
+	windowSeconds, _ = strconv.Atoi(windowStr)
+	
+	if maxRequests <= 0 {
+		maxRequests = 60
+	}
+	if windowSeconds <= 0 {
+		windowSeconds = 60
+	}
+	
+	return true, maxRequests, windowSeconds
+}
+
+// checkRateLimit 检查速率限制
+func checkRateLimit() bool {
+	enabled, maxRequests, windowSeconds := getRateLimitSettings()
+	if !enabled {
+		return true
+	}
+	
+	rateLimitMu.Lock()
+	defer rateLimitMu.Unlock()
+	
+	now := time.Now()
+	windowStart := now.Add(-time.Duration(windowSeconds) * time.Second)
+	
+	// 清理过期记录
+	validTimes := make([]time.Time, 0, len(requestTimes))
+	for _, t := range requestTimes {
+		if t.After(windowStart) {
+			validTimes = append(validTimes, t)
+		}
+	}
+	requestTimes = validTimes
+	
+	// 检查是否超限
+	if len(requestTimes) >= maxRequests {
+		return false
+	}
+	
+	// 记录本次请求
+	requestTimes = append(requestTimes, now)
+	return true
+}
+
+// getCustomRateLimitRules 获取自定义速率限制规则
+func getCustomRateLimitRules() []CustomRateLimitRule {
+	db := database.DB()
+	var rulesJSON string
+	err := db.QueryRow("SELECT value FROM settings WHERE key = 'custom_rate_limit_rules'").Scan(&rulesJSON)
+	if err != nil || rulesJSON == "" {
+		return nil
+	}
+	
+	var rules []CustomRateLimitRule
+	json.Unmarshal([]byte(rulesJSON), &rules)
+	return rules
+}
+
+// checkCustomRateLimit 检查自定义速率限制
+// 返回: (是否通过, 触发的规则名称)
+func checkCustomRateLimit(providerID int, providerName string, modelName string) (bool, string) {
+	rules := getCustomRateLimitRules()
+	if len(rules) == 0 {
+		return true, ""
+	}
+	
+	customRateLimitMu.Lock()
+	defer customRateLimitMu.Unlock()
+	
+	now := time.Now()
+	
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		
+		// 检查规则是否匹配
+		matched := false
+		var key string
+		
+		if rule.ProviderID > 0 && rule.ModelName != "" {
+			// 特定提供商的特定模型
+			if rule.ProviderID == providerID && rule.ModelName == modelName {
+				matched = true
+				key = fmt.Sprintf("provider:%d:model:%s", providerID, modelName)
+			}
+		} else if rule.ProviderID > 0 {
+			// 特定提供商的所有模型
+			if rule.ProviderID == providerID {
+				matched = true
+				key = fmt.Sprintf("provider:%d", providerID)
+			}
+		} else if rule.ModelName != "" {
+			// 所有提供商的特定模型
+			if rule.ModelName == modelName {
+				matched = true
+				key = fmt.Sprintf("model:%s", modelName)
+			}
+		}
+		
+		if !matched {
+			continue
+		}
+		
+		// 检查此规则的速率限制
+		windowStart := now.Add(-time.Duration(rule.Window) * time.Second)
+		
+		// 清理过期记录
+		times := customRequestTimes[key]
+		validTimes := make([]time.Time, 0, len(times))
+		for _, t := range times {
+			if t.After(windowStart) {
+				validTimes = append(validTimes, t)
+			}
+		}
+		customRequestTimes[key] = validTimes
+		
+		// 检查是否超限
+		if len(validTimes) >= rule.MaxRequests {
+			return false, rule.Name
+		}
+		
+		// 记录本次请求
+		customRequestTimes[key] = append(validTimes, now)
+	}
+	
+	return true, ""
+}
+
+// getConcurrencyLimit 获取并发限制
+func getConcurrencyLimit() int {
+	db := database.DB()
+	var enabledStr, limitStr string
+	
+	err := db.QueryRow("SELECT value FROM settings WHERE key = 'concurrency_enabled'").Scan(&enabledStr)
+	if err != nil || enabledStr != "true" {
+		return 0 // 0 表示不限制
+	}
+	
+	db.QueryRow("SELECT value FROM settings WHERE key = 'concurrency_limit'").Scan(&limitStr)
+	limit, _ := strconv.Atoi(limitStr)
+	
+	if limit <= 0 {
+		return 0
+	}
+	return limit
+}
+
+// acquireConcurrency 获取并发槽
+func acquireConcurrency() bool {
+	limit := getConcurrencyLimit()
+	if limit == 0 {
+		atomic.AddInt64(&currentConcurrency, 1)
+		return true
+	}
+	
+	current := atomic.LoadInt64(&currentConcurrency)
+	if current >= int64(limit) {
+		return false
+	}
+	
+	atomic.AddInt64(&currentConcurrency, 1)
+	return true
+}
+
+// releaseConcurrency 释放并发槽
+func releaseConcurrency() {
+	atomic.AddInt64(&currentConcurrency, -1)
+}
+
+// GetCurrentConcurrency 获取当前并发数（用于API）
+func GetCurrentConcurrency() int64 {
+	return atomic.LoadInt64(&currentConcurrency)
+}
 
 // getMaxRetries 从数据库获取最大重试次数
 func getMaxRetries() int {
@@ -31,6 +269,146 @@ func getMaxRetries() int {
 		return 3
 	}
 	return retries
+}
+
+// CustomErrorRule 自定义错误响应规则
+type CustomErrorRule struct {
+	Keyword  string `json:"keyword"`
+	Response string `json:"response"`
+}
+
+// getCustomErrorRules 获取自定义错误响应规则
+func getCustomErrorRules(db *sql.DB) (bool, []CustomErrorRule) {
+	var enabled, rulesJSON string
+	err := db.QueryRow("SELECT value FROM settings WHERE key = 'custom_error_enabled'").Scan(&enabled)
+	if err != nil || enabled != "true" {
+		return false, nil
+	}
+	
+	err = db.QueryRow("SELECT value FROM settings WHERE key = 'custom_error_rules'").Scan(&rulesJSON)
+	if err != nil {
+		return false, nil
+	}
+	
+	var rules []CustomErrorRule
+	json.Unmarshal([]byte(rulesJSON), &rules)
+	return true, rules
+}
+
+// checkCustomErrorResponse 检查错误是否匹配自定义响应规则
+func checkCustomErrorResponse(db *sql.DB, errMsg string) (bool, string) {
+	enabled, rules := getCustomErrorRules(db)
+	if !enabled || len(rules) == 0 {
+		return false, ""
+	}
+	
+	errMsgLower := strings.ToLower(errMsg)
+	for _, rule := range rules {
+		if rule.Keyword != "" && strings.Contains(errMsgLower, strings.ToLower(rule.Keyword)) {
+			return true, rule.Response
+		}
+	}
+	return false, ""
+}
+
+// buildFakeResponse 构建伪造的正常响应
+func buildFakeResponse(content string, model string) map[string]interface{} {
+	return map[string]interface{}{
+		"id":      "chatcmpl-fake-" + fmt.Sprintf("%d", time.Now().UnixNano()),
+		"object":  "chat.completion",
+		"created": time.Now().Unix(),
+		"model":   model,
+		"choices": []map[string]interface{}{
+			{
+				"index": 0,
+				"message": map[string]interface{}{
+					"role":    "assistant",
+					"content": content,
+				},
+				"finish_reason": "stop",
+			},
+		},
+		"usage": map[string]interface{}{
+			"prompt_tokens":     0,
+			"completion_tokens": len(content) / 4,
+			"total_tokens":      len(content) / 4,
+		},
+	}
+}
+
+// buildFakeStreamResponse 构建伪造的流式响应
+func buildFakeStreamResponse(content string, model string) string {
+	id := "chatcmpl-fake-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	created := time.Now().Unix()
+	
+	// 构建流式响应数据
+	var sb strings.Builder
+	
+	// 第一个chunk - role
+	chunk1 := map[string]interface{}{
+		"id":      id,
+		"object":  "chat.completion.chunk",
+		"created": created,
+		"model":   model,
+		"choices": []map[string]interface{}{
+			{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"role": "assistant",
+				},
+				"finish_reason": nil,
+			},
+		},
+	}
+	data1, _ := json.Marshal(chunk1)
+	sb.WriteString("data: ")
+	sb.WriteString(string(data1))
+	sb.WriteString("\n\n")
+	
+	// 第二个chunk - content
+	chunk2 := map[string]interface{}{
+		"id":      id,
+		"object":  "chat.completion.chunk",
+		"created": created,
+		"model":   model,
+		"choices": []map[string]interface{}{
+			{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"content": content,
+				},
+				"finish_reason": nil,
+			},
+		},
+	}
+	data2, _ := json.Marshal(chunk2)
+	sb.WriteString("data: ")
+	sb.WriteString(string(data2))
+	sb.WriteString("\n\n")
+	
+	// 第三个chunk - finish
+	chunk3 := map[string]interface{}{
+		"id":      id,
+		"object":  "chat.completion.chunk",
+		"created": created,
+		"model":   model,
+		"choices": []map[string]interface{}{
+			{
+				"index":         0,
+				"delta":         map[string]interface{}{},
+				"finish_reason": "stop",
+			},
+		},
+	}
+	data3, _ := json.Marshal(chunk3)
+	sb.WriteString("data: ")
+	sb.WriteString(string(data3))
+	sb.WriteString("\n\n")
+	
+	// 结束标记
+	sb.WriteString("data: [DONE]\n\n")
+	
+	return sb.String()
 }
 
 // injectSystemPrompt 注入系统前置提示词
@@ -121,6 +499,9 @@ func OpenAIListModels(c *gin.Context) {
 }
 
 func OpenAIChatCompletions(c *gin.Context) {
+	db := database.DB()
+	
+	// 先解析请求获取模型名和stream参数，用于后续的自定义错误响应
 	var payload map[string]interface{}
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		c.JSON(400, gin.H{"detail": "无效的 JSON"})
@@ -137,9 +518,59 @@ func OpenAIChatCompletions(c *gin.Context) {
 	if s, ok := payload["stream"].(bool); ok {
 		stream = s
 	}
+	
+	// 检查速率限制
+	if !checkRateLimit() {
+		errMsg := "请求过于频繁，请稍后重试 rate_limit_exceeded"
+		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
+			logger.Error(fmt.Sprintf("%s | %s | 自定义响应(原错误: 全局速率限制)", c.ClientIP(), modelName))
+			if stream {
+				c.Header("Content-Type", "text/event-stream")
+				c.Header("Cache-Control", "no-cache")
+				c.Header("Connection", "keep-alive")
+				c.String(200, buildFakeStreamResponse(customResponse, modelName))
+			} else {
+				c.JSON(200, buildFakeResponse(customResponse, modelName))
+			}
+			return
+		}
+		c.JSON(429, gin.H{
+			"error": gin.H{
+				"message": "请求过于频繁，请稍后重试",
+				"type":    "rate_limit_error",
+				"code":    "rate_limit_exceeded",
+			},
+		})
+		return
+	}
+	
+	// 检查并发限制
+	if !acquireConcurrency() {
+		errMsg := "服务器繁忙，请稍后重试 concurrency_limit_exceeded"
+		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
+			logger.Error(fmt.Sprintf("%s | %s | 自定义响应(原错误: 并发限制)", c.ClientIP(), modelName))
+			if stream {
+				c.Header("Content-Type", "text/event-stream")
+				c.Header("Cache-Control", "no-cache")
+				c.Header("Connection", "keep-alive")
+				c.String(200, buildFakeStreamResponse(customResponse, modelName))
+			} else {
+				c.JSON(200, buildFakeResponse(customResponse, modelName))
+			}
+			return
+		}
+		c.JSON(503, gin.H{
+			"error": gin.H{
+				"message": "服务器繁忙，请稍后重试",
+				"type":    "concurrency_limit_error",
+				"code":    "concurrency_limit_exceeded",
+			},
+		})
+		return
+	}
+	defer releaseConcurrency()
 
 	// 获取流式模式设置
-	db := database.DB()
 	var streamMode string
 	db.QueryRow("SELECT value FROM settings WHERE key = 'stream_mode'").Scan(&streamMode)
 
@@ -166,12 +597,67 @@ func OpenAIChatCompletions(c *gin.Context) {
 	// 查找模型
 	model, provider, err := findModel(modelName)
 	if err != nil {
-		c.JSON(404, gin.H{"detail": fmt.Sprintf("模型不存在: %s", modelName)})
+		errMsg := fmt.Sprintf("模型不存在: %s", modelName)
+		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
+			logger.Error(fmt.Sprintf("%s | %s | 自定义响应(原错误: 模型不存在)", c.ClientIP(), modelName))
+			if stream {
+				c.Header("Content-Type", "text/event-stream")
+				c.Header("Cache-Control", "no-cache")
+				c.Header("Connection", "keep-alive")
+				c.String(200, buildFakeStreamResponse(customResponse, modelName))
+			} else {
+				c.JSON(200, buildFakeResponse(customResponse, modelName))
+			}
+			return
+		}
+		c.JSON(404, gin.H{"detail": errMsg})
 		return
 	}
 
 	if !provider.IsActive {
-		c.JSON(503, gin.H{"detail": fmt.Sprintf("提供商已禁用: %s", provider.Name)})
+		errMsg := fmt.Sprintf("提供商已禁用: %s", provider.Name)
+		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
+			logger.Error(fmt.Sprintf("%s | %s | 自定义响应(原错误: 提供商禁用)", c.ClientIP(), modelName))
+			if stream {
+				c.Header("Content-Type", "text/event-stream")
+				c.Header("Cache-Control", "no-cache")
+				c.Header("Connection", "keep-alive")
+				c.String(200, buildFakeStreamResponse(customResponse, modelName))
+			} else {
+				c.JSON(200, buildFakeResponse(customResponse, modelName))
+			}
+			return
+		}
+		c.JSON(503, gin.H{"detail": errMsg})
+		return
+	}
+
+	// 检查自定义速率限制
+	displayName := modelName
+	if model.DisplayName != "" {
+		displayName = model.DisplayName
+	}
+	if passed, ruleName := checkCustomRateLimit(provider.ID, provider.Name, displayName); !passed {
+		errMsg := fmt.Sprintf("触发自定义速率限制规则 [%s]，请稍后重试 custom_rate_limit_exceeded", ruleName)
+		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
+			logger.Error(fmt.Sprintf("%s | %s | 自定义响应(原错误: 自定义速率限制 %s)", c.ClientIP(), modelName, ruleName))
+			if stream {
+				c.Header("Content-Type", "text/event-stream")
+				c.Header("Cache-Control", "no-cache")
+				c.Header("Connection", "keep-alive")
+				c.String(200, buildFakeStreamResponse(customResponse, modelName))
+			} else {
+				c.JSON(200, buildFakeResponse(customResponse, modelName))
+			}
+			return
+		}
+		c.JSON(429, gin.H{
+			"error": gin.H{
+				"message": fmt.Sprintf("触发自定义速率限制规则 [%s]，请稍后重试", ruleName),
+				"type":    "rate_limit_error",
+				"code":    "custom_rate_limit_exceeded",
+			},
+		})
 		return
 	}
 
@@ -214,6 +700,17 @@ func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload 
 	duration := time.Since(startTime).Seconds()
 
 	if err != nil {
+		errMsg := err.Error()
+		
+		// 检查是否有自定义错误响应
+		db := database.DB()
+		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
+			logger.Info(fmt.Sprintf("%s | %s | %.2fs | 自定义响应(原错误: %s)", c.ClientIP(), modelName, duration, errMsg))
+			logger.RequestSuccess()
+			c.JSON(200, buildFakeResponse(customResponse, modelName))
+			return
+		}
+		
 		logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), modelName, duration, err))
 		logger.RequestError()
 		c.JSON(500, gin.H{"detail": fmt.Sprintf("请求失败: %v", err)})
@@ -260,6 +757,22 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 	resp, err := cfg.ChatCompletionStreamWithRetry(payload, maxRetries)
 	if err != nil {
 		duration := time.Since(startTime).Seconds()
+		errMsg := err.Error()
+		
+		// 检查是否有自定义错误响应
+		db := database.DB()
+		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
+			logger.Info(fmt.Sprintf("%s | %s | %.2fs | 自定义响应(原错误: %s)", c.ClientIP(), modelName, duration, errMsg))
+			logger.RequestSuccess()
+			
+			// 返回伪造的流式响应
+			c.Header("Content-Type", "text/event-stream")
+			c.Header("Cache-Control", "no-cache")
+			c.Header("Connection", "keep-alive")
+			c.String(200, buildFakeStreamResponse(customResponse, modelName))
+			return
+		}
+		
 		logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), modelName, duration, err))
 		logger.RequestError()
 		c.JSON(500, gin.H{"detail": fmt.Sprintf("请求失败: %v", err)})
@@ -269,10 +782,26 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
+		bodyStr := string(body)
 		duration := time.Since(startTime).Seconds()
-		logger.Error(fmt.Sprintf("%s | %s | %.2fs | status %d: %s", c.ClientIP(), modelName, duration, resp.StatusCode, string(body)))
+		
+		// 检查是否有自定义错误响应
+		db := database.DB()
+		if matched, customResponse := checkCustomErrorResponse(db, bodyStr); matched {
+			logger.Info(fmt.Sprintf("%s | %s | %.2fs | 自定义响应(原错误: status %d)", c.ClientIP(), modelName, duration, resp.StatusCode))
+			logger.RequestSuccess()
+			
+			// 返回伪造的流式响应
+			c.Header("Content-Type", "text/event-stream")
+			c.Header("Cache-Control", "no-cache")
+			c.Header("Connection", "keep-alive")
+			c.String(200, buildFakeStreamResponse(customResponse, modelName))
+			return
+		}
+		
+		logger.Error(fmt.Sprintf("%s | %s | %.2fs | status %d: %s", c.ClientIP(), modelName, duration, resp.StatusCode, bodyStr))
 		logger.RequestError()
-		c.JSON(resp.StatusCode, gin.H{"detail": string(body)})
+		c.JSON(resp.StatusCode, gin.H{"detail": bodyStr})
 		return
 	}
 

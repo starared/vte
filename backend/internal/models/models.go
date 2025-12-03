@@ -148,6 +148,28 @@ type SystemPromptRequest struct {
 	Enabled bool   `json:"enabled"`
 }
 
+// CustomErrorRule 自定义错误响应规则
+type CustomErrorRule struct {
+	Keyword  string `json:"keyword"`  // 错误关键词匹配
+	Response string `json:"response"` // 自定义响应内容
+}
+
+type CustomErrorResponseRequest struct {
+	Enabled bool              `json:"enabled"`
+	Rules   []CustomErrorRule `json:"rules"`
+}
+
+type RateLimitRequest struct {
+	Enabled     bool `json:"enabled"`
+	MaxRequests int  `json:"max_requests"`
+	Window      int  `json:"window"`
+}
+
+type ConcurrencyRequest struct {
+	Enabled bool `json:"enabled"`
+	Limit   int  `json:"limit"`
+}
+
 type TokenUsage struct {
 	ID               int       `json:"id"`
 	ModelName        string    `json:"model_name"`

@@ -121,6 +121,14 @@ func Setup(cfg *config.Config) *gin.Engine {
 			settings.PUT("/theme", handlers.SetThemeSettings)
 			settings.GET("/system-prompt", handlers.GetSystemPrompt)
 			settings.PUT("/system-prompt", handlers.SetSystemPrompt)
+			settings.GET("/custom-error", handlers.GetCustomErrorResponse)
+			settings.PUT("/custom-error", handlers.SetCustomErrorResponse)
+			settings.GET("/rate-limit", handlers.GetRateLimitSettings)
+			settings.PUT("/rate-limit", handlers.SetRateLimitSettings)
+			settings.GET("/concurrency", handlers.GetConcurrencySettings)
+			settings.PUT("/concurrency", handlers.SetConcurrencySettings)
+			settings.GET("/custom-rate-limit", handlers.GetCustomRateLimitRules)
+			settings.PUT("/custom-rate-limit", handlers.SetCustomRateLimitRules)
 		}
 
 		// 版本
