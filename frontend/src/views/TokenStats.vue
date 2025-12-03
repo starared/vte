@@ -98,8 +98,8 @@ function formatNumber(num) {
   return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 }
 
-async function loadStats() {
-  loading.value = true
+async function loadStats(showLoading = true) {
+  if (showLoading) loading.value = true
   try {
     const res = await api.get('/api/tokens/stats')
     stats.value = res.data
@@ -109,7 +109,7 @@ async function loadStats() {
   } catch (error) {
     console.error('加载统计失败:', error)
   } finally {
-    loading.value = false
+    if (showLoading) loading.value = false
   }
 }
 
@@ -237,7 +237,7 @@ function renderHourlyChart() {
 
 function startAutoRefresh() {
   if (timer) clearInterval(timer)
-  timer = setInterval(loadStats, 10000) // 每10秒刷新
+  timer = setInterval(() => loadStats(false), 10000) // 每10秒刷新
 }
 
 function stopAutoRefresh() {

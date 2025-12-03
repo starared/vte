@@ -130,3 +130,56 @@ func SetThemeSettings(c *gin.Context) {
 	logger.Info(fmt.Sprintf("%s | 更新主题 | %s", c.ClientIP(), req.Theme))
 	c.JSON(200, gin.H{"message": "设置已更新"})
 }
+
+// GetSystemPrompt 获取系统前置提示词
+func GetSystemPrompt(c *gin.Context) {
+	db := database.DB()
+	var prompt, enabled string
+	db.QueryRow("SELECT value FROM settings WHERE key = 'system_prompt'").Scan(&prompt)
+	err := db.QueryRow("SELECT value FROM settings WHERE key = 'system_prompt_enabled'").Scan(&enabled)
+	if err != nil {
+		enabled = "false"
+	}
+	c.JSON(200, gin.H{
+		"prompt":  prompt,
+		"enabled": enabled == "true",
+	})
+}
+
+// SetSystemPrompt 设置系统前置提示词
+func SetSystemPrompt(c *gin.Context) {
+	var req models.SystemPromptRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"detail": "无效的请求"})
+		return
+	}
+
+	db := database.DB()
+	
+	// 保存提示词内容
+	_, err := db.Exec(`
+		INSERT INTO settings (key, value) VALUES ('system_prompt', ?)
+		ON CONFLICT(key) DO UPDATE SET value = ?
+	`, req.Prompt, req.Prompt)
+	if err != nil {
+		c.JSON(500, gin.H{"detail": "保存失败"})
+		return
+	}
+
+	// 保存启用状态
+	enabledStr := "false"
+	if req.Enabled {
+		enabledStr = "true"
+	}
+	_, err = db.Exec(`
+		INSERT INTO settings (key, value) VALUES ('system_prompt_enabled', ?)
+		ON CONFLICT(key) DO UPDATE SET value = ?
+	`, enabledStr, enabledStr)
+	if err != nil {
+		c.JSON(500, gin.H{"detail": "保存失败"})
+		return
+	}
+
+	logger.Info(fmt.Sprintf("%s | 更新系统提示词 | 启用=%v 长度=%d", c.ClientIP(), req.Enabled, len(req.Prompt)))
+	c.JSON(200, gin.H{"message": "设置已更新"})
+}

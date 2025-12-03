@@ -84,6 +84,29 @@
         </el-form-item>
       </el-form>
     </el-card>
+
+    <el-card class="section">
+      <template #header>系统前置提示词</template>
+      
+      <el-form label-width="120px">
+        <el-form-item label="启用">
+          <el-switch v-model="systemPromptEnabled" @change="updateSystemPrompt" />
+          <span class="hint-text" style="margin-left: 12px">启用后将在每次请求的 messages 最前面注入系统提示词</span>
+        </el-form-item>
+        <el-form-item label="提示词内容">
+          <el-input
+            v-model="systemPrompt"
+            type="textarea"
+            :rows="6"
+            placeholder="输入系统前置提示词..."
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" @click="updateSystemPrompt" :loading="saving">保存提示词</el-button>
+        </el-form-item>
+      </el-form>
+    </el-card>
   </div>
 </template>
 
@@ -104,15 +127,20 @@ const streamMode = ref('auto')
 const maxRetries = ref(3)
 const themeMode = ref(themeStore.theme)
 const showApiKey = ref(false)
+const systemPrompt = ref('')
+const systemPromptEnabled = ref(false)
 
 onMounted(async () => {
   try {
-    const [streamRes, retryRes] = await Promise.all([
+    const [streamRes, retryRes, promptRes] = await Promise.all([
       api.get('/api/settings/stream-mode'),
-      api.get('/api/settings/retry')
+      api.get('/api/settings/retry'),
+      api.get('/api/settings/system-prompt')
     ])
     streamMode.value = streamRes.data.mode
     maxRetries.value = retryRes.data.max_retries
+    systemPrompt.value = promptRes.data.prompt || ''
+    systemPromptEnabled.value = promptRes.data.enabled
     themeMode.value = themeStore.theme
   } catch (e) {
     console.error('获取设置失败', e)
@@ -139,6 +167,21 @@ async function updateRetrySettings(value) {
     ElMessage.success('重试设置已更新')
   } catch (e) {
     ElMessage.error('更新失败')
+  }
+}
+
+async function updateSystemPrompt() {
+  saving.value = true
+  try {
+    await api.put('/api/settings/system-prompt', {
+      prompt: systemPrompt.value,
+      enabled: systemPromptEnabled.value
+    })
+    ElMessage.success('系统提示词已更新')
+  } catch (e) {
+    ElMessage.error('更新失败')
+  } finally {
+    saving.value = false
   }
 }
 

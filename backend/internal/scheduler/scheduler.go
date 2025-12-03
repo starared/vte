@@ -55,5 +55,9 @@ func dailyCleanupTask() {
 		} else {
 			logger.Info("token记录清理完成")
 		}
+		
+		// 同时重置日志统计
+		logger.ResetStats()
+		logger.Info("日志统计已重置")
 	}
 }

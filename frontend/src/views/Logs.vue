@@ -58,8 +58,8 @@ const successRate = computed(() => {
   return Math.round((stats.value.success_requests / stats.value.total_requests) * 100)
 })
 
-async function loadLogs() {
-  loading.value = true
+async function loadLogs(showLoading = true) {
+  if (showLoading) loading.value = true
   try {
     const [logsRes, statsRes] = await Promise.all([
       api.get('/api/logs'),
@@ -73,7 +73,7 @@ async function loadLogs() {
       }
     })
   } finally {
-    loading.value = false
+    if (showLoading) loading.value = false
   }
 }
 
@@ -100,7 +100,7 @@ function getLogClass(line) {
 
 function startAutoRefresh() {
   if (timer) clearInterval(timer)
-  timer = setInterval(loadLogs, 3000)
+  timer = setInterval(() => loadLogs(false), 3000)
 }
 
 function stopAutoRefresh() {

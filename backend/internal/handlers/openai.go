@@ -33,6 +33,41 @@ func getMaxRetries() int {
 	return retries
 }
 
+// injectSystemPrompt 注入系统前置提示词
+func injectSystemPrompt(db *sql.DB, payload map[string]interface{}) {
+	// 检查是否启用
+	var enabled string
+	err := db.QueryRow("SELECT value FROM settings WHERE key = 'system_prompt_enabled'").Scan(&enabled)
+	if err != nil || enabled != "true" {
+		return
+	}
+
+	// 获取提示词内容
+	var prompt string
+	err = db.QueryRow("SELECT value FROM settings WHERE key = 'system_prompt'").Scan(&prompt)
+	if err != nil || prompt == "" {
+		return
+	}
+
+	// 获取现有 messages
+	messages, ok := payload["messages"].([]interface{})
+	if !ok {
+		return
+	}
+
+	// 创建系统提示词消息
+	systemMsg := map[string]interface{}{
+		"role":    "system",
+		"content": prompt,
+	}
+
+	// 在最前面插入系统提示词
+	newMessages := make([]interface{}, 0, len(messages)+1)
+	newMessages = append(newMessages, systemMsg)
+	newMessages = append(newMessages, messages...)
+	payload["messages"] = newMessages
+}
+
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true // 允许所有来源
@@ -124,6 +159,9 @@ func OpenAIChatCompletions(c *gin.Context) {
 			}
 		}
 	}
+
+	// 注入系统前置提示词
+	injectSystemPrompt(db, payload)
 
 	// 查找模型
 	model, provider, err := findModel(modelName)

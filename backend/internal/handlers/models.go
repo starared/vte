@@ -36,7 +36,7 @@ func ListAllModels(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	var result []models.Model
+	result := []models.Model{}
 	for rows.Next() {
 		var m models.Model
 		var isActive, customName int

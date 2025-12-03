@@ -143,6 +143,11 @@ type ThemeSettingsRequest struct {
 	Theme string `json:"theme" binding:"required"`
 }
 
+type SystemPromptRequest struct {
+	Prompt  string `json:"prompt"`
+	Enabled bool   `json:"enabled"`
+}
+
 type TokenUsage struct {
 	ID               int       `json:"id"`
 	ModelName        string    `json:"model_name"`

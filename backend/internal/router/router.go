@@ -119,6 +119,8 @@ func Setup(cfg *config.Config) *gin.Engine {
 			settings.PUT("/retry", handlers.SetRetrySettings)
 			settings.GET("/theme", handlers.GetThemeSettings)
 			settings.PUT("/theme", handlers.SetThemeSettings)
+			settings.GET("/system-prompt", handlers.GetSystemPrompt)
+			settings.PUT("/system-prompt", handlers.SetSystemPrompt)
 		}
 
 		// 版本
