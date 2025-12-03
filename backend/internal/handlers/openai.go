@@ -298,6 +298,9 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 		}
 	}
 	
+	// 用于跟踪请求是否已完成统计
+	requestCompleted := false
+	
 	c.Stream(func(w io.Writer) bool {
 		buf := make([]byte, 4096)
 		n, err := resp.Body.Read(buf)
@@ -392,14 +395,23 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 				
 				logger.Info(fmt.Sprintf("%s | %s | %.2fs", c.ClientIP(), modelName, duration))
 				logger.RequestSuccess()
+				requestCompleted = true
 			} else {
 				logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), modelName, duration, err))
 				logger.RequestError()
+				requestCompleted = true
 			}
 			return false
 		}
 		return true
 	})
+	
+	// 如果流被中断但没有正常完成统计，记录为成功（数据可能已部分发送）
+	if !requestCompleted {
+		duration := time.Since(startTime).Seconds()
+		logger.Info(fmt.Sprintf("%s | %s | %.2fs | 流被中断", c.ClientIP(), modelName, duration))
+		logger.RequestSuccess()
+	}
 }
 
 type modelWithProvider struct {
