@@ -28,6 +28,20 @@ func GetBeijingTime() time.Time {
 	return time.Now().In(beijingLoc)
 }
 
+// GetCurrentPeriodStart 获取当前统计周期的开始时间（每天15:00开始新周期）
+func GetCurrentPeriodStart() time.Time {
+	now := GetBeijingTime()
+	// 今天的15:00
+	today3PM := time.Date(now.Year(), now.Month(), now.Day(), 15, 0, 0, 0, beijingLoc)
+	
+	// 如果当前时间在15:00之前，则周期开始时间是昨天的15:00
+	if now.Before(today3PM) {
+		return today3PM.Add(-24 * time.Hour)
+	}
+	// 否则周期开始时间是今天的15:00
+	return today3PM
+}
+
 // RecordTokenUsage 记录token使用情况
 func RecordTokenUsage(modelName, providerName string, promptTokens, completionTokens, totalTokens int) error {
 	db := database.DB()
@@ -38,16 +52,16 @@ func RecordTokenUsage(modelName, providerName string, promptTokens, completionTo
 	return err
 }
 
-// GetTodayTokenStats 获取今天的token统计
+// GetTodayTokenStats 获取当前周期的token统计（15:00 到 次日 15:00）
 func GetTodayTokenStats(c *gin.Context) {
 	db := database.DB()
 	
-	// 使用北京时间获取今天的开始时间，然后转换为UTC用于数据库查询
+	// 使用北京时间获取当前统计周期的开始时间（15:00），然后转换为UTC用于数据库查询
 	now := GetBeijingTime()
-	todayStartBeijing := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, beijingLoc)
-	todayStartUTC := todayStartBeijing.UTC().Format("2006-01-02 15:04:05")
+	periodStart := GetCurrentPeriodStart()
+	periodStartUTC := periodStart.UTC().Format("2006-01-02 15:04:05")
 	
-	// 查询今天的总统计（24小时）
+	// 查询当前周期的总统计（15:00 到 次日 15:00）
 	var stats models.TokenStats
 	err := db.QueryRow(`
 		SELECT 
@@ -56,7 +70,7 @@ func GetTodayTokenStats(c *gin.Context) {
 			COALESCE(SUM(completion_tokens), 0) as completion_tokens
 		FROM token_usage
 		WHERE created_at >= ?
-	`, todayStartUTC).Scan(&stats.TotalTokens, &stats.PromptTokens, &stats.CompletionTokens)
+	`, periodStartUTC).Scan(&stats.TotalTokens, &stats.PromptTokens, &stats.CompletionTokens)
 	
 	if err != nil {
 		c.JSON(500, gin.H{"detail": "查询统计失败"})
@@ -69,7 +83,7 @@ func GetTodayTokenStats(c *gin.Context) {
 	// 计算当前时段（20分钟一个时段：0-19, 20-39, 40-59）
 	currentSlot := currentHour*3 + currentMinute/20
 	
-	// 查询今天所有的统计数据（按 20 分钟分组）
+	// 查询当前周期所有的统计数据（按 20 分钟分组）
 	rows, err := db.Query(`
 		SELECT 
 			CAST(strftime('%H', datetime(created_at, '+8 hours')) AS INTEGER) as hour,
@@ -80,7 +94,7 @@ func GetTodayTokenStats(c *gin.Context) {
 		WHERE created_at >= ?
 		GROUP BY hour, minute_slot
 		ORDER BY hour, minute_slot
-	`, todayStartUTC)
+	`, periodStartUTC)
 	
 	if err != nil {
 		c.JSON(500, gin.H{"detail": "查询时段统计失败"})
@@ -138,7 +152,7 @@ func GetTodayTokenStats(c *gin.Context) {
 		WHERE created_at >= ?
 		GROUP BY model_name, provider_name
 		ORDER BY total_tokens DESC
-	`, todayStartUTC)
+	`, periodStartUTC)
 	
 	if err != nil {
 		c.JSON(500, gin.H{"detail": "查询模型统计失败"})
@@ -173,33 +187,31 @@ func GetTodayTokenStats(c *gin.Context) {
 	})
 }
 
-// CleanOldTokenRecords 清理旧的token记录（只保留今天的，基于北京时间）
+// CleanOldTokenRecords 清理旧的token记录（删除当前周期之前的所有数据）
 func CleanOldTokenRecords() error {
 	db := database.DB()
-	// 使用北京时间获取今天的开始时间
-	now := GetBeijingTime()
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, beijingLoc)
+	// 获取当前统计周期的开始时间（15:00）
+	periodStart := GetCurrentPeriodStart()
 	// 转换为 UTC 时间进行数据库查询
-	todayStartUTC := todayStart.UTC()
-	_, err := db.Exec("DELETE FROM token_usage WHERE created_at < ?", todayStartUTC.Format("2006-01-02 15:04:05"))
+	periodStartUTC := periodStart.UTC()
+	_, err := db.Exec("DELETE FROM token_usage WHERE created_at < ?", periodStartUTC.Format("2006-01-02 15:04:05"))
 	return err
 }
 
-// ResetTodayTokenStats 重置今天的统计（手动重置）
+// ResetTodayTokenStats 重置当前周期的统计（手动重置）
 func ResetTodayTokenStats(c *gin.Context) {
 	db := database.DB()
 	
-	// 使用北京时间获取今天的开始时间
-	now := GetBeijingTime()
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, beijingLoc)
+	// 获取当前统计周期的开始时间（15:00）
+	periodStart := GetCurrentPeriodStart()
 	// 转换为 UTC 时间进行数据库查询
-	todayStartUTC := todayStart.UTC()
+	periodStartUTC := periodStart.UTC()
 	
-	_, err := db.Exec("DELETE FROM token_usage WHERE created_at >= ?", todayStartUTC.Format("2006-01-02 15:04:05"))
+	_, err := db.Exec("DELETE FROM token_usage WHERE created_at >= ?", periodStartUTC.Format("2006-01-02 15:04:05"))
 	if err != nil {
 		c.JSON(500, gin.H{"detail": fmt.Sprintf("重置失败: %v", err)})
 		return
 	}
 	
-	c.JSON(200, gin.H{"message": "今日统计已重置"})
+	c.JSON(200, gin.H{"message": "当前周期统计已重置"})
 }

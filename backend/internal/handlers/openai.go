@@ -18,6 +18,7 @@ import (
 	"vte/internal/database"
 	"vte/internal/logger"
 	"vte/internal/proxy"
+	"vte/internal/tokenizer"
 )
 
 // 并发控制
@@ -812,19 +813,13 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 
 	// 用于累积 token 统计
 	var totalPromptTokens, totalCompletionTokens, totalTotalTokens int
-	// 用于估算 token（当 API 不返回 usage 时的备选方案）
-	var estimatedOutputContent strings.Builder
+	// 用于收集输出内容（当 API 不返回 usage 时使用 tiktoken 计算）
+	var outputContent strings.Builder
 	
-	// 从请求中估算输入 token 数（粗略估算：英文每4字符约1 token，中文每字约1.5 token）
-	estimatedInputChars := 0
+	// 使用 tiktoken 精确计算输入 token 数
+	var inputTokens int
 	if messages, ok := payload["messages"].([]interface{}); ok {
-		for _, msg := range messages {
-			if m, ok := msg.(map[string]interface{}); ok {
-				if content, ok := m["content"].(string); ok {
-					estimatedInputChars += len(content)
-				}
-			}
-		}
+		inputTokens = tokenizer.CountMessagesTokens(messages, modelName)
 	}
 	
 	// 用于跟踪请求是否已完成统计
@@ -860,7 +855,7 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 				}
 			}
 			
-			// 估算输出 token（从流式内容中提取）
+			// 收集输出内容（用于 tiktoken 计算 token）
 			lines := strings.Split(data, "\n")
 			for _, line := range lines {
 				if strings.HasPrefix(line, "data: ") && !strings.Contains(line, "[DONE]") {
@@ -871,7 +866,7 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 							if choice, ok := choices[0].(map[string]interface{}); ok {
 								if delta, ok := choice["delta"].(map[string]interface{}); ok {
 									if content, ok := delta["content"].(string); ok {
-										estimatedOutputContent.WriteString(content)
+										outputContent.WriteString(content)
 									}
 								}
 							}
@@ -903,22 +898,14 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 					RecordTokenUsage(displayName, providerName, totalPromptTokens, totalCompletionTokens, totalTotalTokens)
 					logger.Info(fmt.Sprintf("%s | %s | Token: %d (prompt=%d, completion=%d)", c.ClientIP(), modelName, totalTotalTokens, totalPromptTokens, totalCompletionTokens))
 				} else {
-					// API没有返回usage，使用估算值
-					// 估算方法：英文约4字符/token，中文约1.5字符/token，这里用3字符/token作为折中
-					estimatedInputTokens := estimatedInputChars / 3
-					if estimatedInputTokens < 1 && estimatedInputChars > 0 {
-						estimatedInputTokens = 1
-					}
-					outputContent := estimatedOutputContent.String()
-					estimatedOutputTokens := len(outputContent) / 3
-					if estimatedOutputTokens < 1 && len(outputContent) > 0 {
-						estimatedOutputTokens = 1
-					}
+					// API没有返回usage，使用 tiktoken 精确计算
+					outputText := outputContent.String()
+					outputTokens := tokenizer.CountTokens(outputText, modelName)
 					
-					if estimatedInputTokens > 0 || estimatedOutputTokens > 0 {
-						estimatedTotal := estimatedInputTokens + estimatedOutputTokens
-						RecordTokenUsage(displayName, providerName, estimatedInputTokens, estimatedOutputTokens, estimatedTotal)
-						logger.Info(fmt.Sprintf("%s | %s | Token估算: ~%d (API未返回usage)", c.ClientIP(), modelName, estimatedTotal))
+					if inputTokens > 0 || outputTokens > 0 {
+						totalTokens := inputTokens + outputTokens
+						RecordTokenUsage(displayName, providerName, inputTokens, outputTokens, totalTokens)
+						logger.Info(fmt.Sprintf("%s | %s | Token(tiktoken): %d (prompt=%d, completion=%d)", c.ClientIP(), modelName, totalTokens, inputTokens, outputTokens))
 					}
 				}
 				
