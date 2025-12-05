@@ -495,7 +495,6 @@ func OpenAIListModels(c *gin.Context) {
 		})
 	}
 
-	logger.Info(fmt.Sprintf("%s | 获取模型列表 | %d个", c.ClientIP(), len(data)))
 	c.JSON(200, gin.H{"object": "list", "data": data})
 }
 
@@ -825,16 +824,38 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 	// 用于跟踪请求是否已完成统计
 	requestCompleted := false
 	
+	// 用于处理跨 buffer 的 SSE 数据
+	var sseBuffer strings.Builder
+	
 	c.Stream(func(w io.Writer) bool {
 		buf := make([]byte, 4096)
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			data := string(buf[:n])
 			
+			// 将数据追加到缓冲区
+			sseBuffer.WriteString(data)
+			bufferContent := sseBuffer.String()
+			
+			// 按完整的行处理
+			lastNewline := strings.LastIndex(bufferContent, "\n")
+			if lastNewline == -1 {
+				// 没有完整的行，继续等待
+				w.Write(buf[:n])
+				return true
+			}
+			
+			// 处理完整的行
+			completeData := bufferContent[:lastNewline+1]
+			// 保留不完整的部分
+			sseBuffer.Reset()
+			sseBuffer.WriteString(bufferContent[lastNewline+1:])
+			
 			// 尝试解析SSE数据中的usage信息
-			if strings.Contains(data, "\"usage\"") {
-				lines := strings.Split(data, "\n")
+			if strings.Contains(completeData, "\"usage\"") {
+				lines := strings.Split(completeData, "\n")
 				for _, line := range lines {
+					line = strings.TrimSpace(line)
 					if strings.HasPrefix(line, "data: ") && !strings.Contains(line, "[DONE]") {
 						jsonData := strings.TrimPrefix(line, "data: ")
 						var chunk map[string]interface{}
@@ -856,8 +877,9 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 			}
 			
 			// 收集输出内容（用于 tiktoken 计算 token）
-			lines := strings.Split(data, "\n")
+			lines := strings.Split(completeData, "\n")
 			for _, line := range lines {
+				line = strings.TrimSpace(line)
 				if strings.HasPrefix(line, "data: ") && !strings.Contains(line, "[DONE]") {
 					jsonData := strings.TrimPrefix(line, "data: ")
 					var chunk map[string]interface{}
@@ -892,11 +914,11 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 					displayName = model.DisplayName
 				}
 				
-				// 记录token使用情况
+				// 记录token使用情况并打印日志（合并为一行）
 				if totalTotalTokens > 0 {
 					// API返回了准确的usage信息
 					RecordTokenUsage(displayName, providerName, totalPromptTokens, totalCompletionTokens, totalTotalTokens)
-					logger.Info(fmt.Sprintf("%s | %s | Token: %d (prompt=%d, completion=%d)", c.ClientIP(), modelName, totalTotalTokens, totalPromptTokens, totalCompletionTokens))
+					logger.Info(fmt.Sprintf("%s | %s | %.2fs | Token: %d (in=%d, out=%d)", c.ClientIP(), modelName, duration, totalTotalTokens, totalPromptTokens, totalCompletionTokens))
 				} else {
 					// API没有返回usage，使用 tiktoken 精确计算
 					outputText := outputContent.String()
@@ -905,11 +927,12 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 					if inputTokens > 0 || outputTokens > 0 {
 						totalTokens := inputTokens + outputTokens
 						RecordTokenUsage(displayName, providerName, inputTokens, outputTokens, totalTokens)
-						logger.Info(fmt.Sprintf("%s | %s | Token(tiktoken): %d (prompt=%d, completion=%d)", c.ClientIP(), modelName, totalTokens, inputTokens, outputTokens))
+						logger.Info(fmt.Sprintf("%s | %s | %.2fs | Token: %d (in=%d, out=%d)", c.ClientIP(), modelName, duration, totalTokens, inputTokens, outputTokens))
+					} else {
+						logger.Info(fmt.Sprintf("%s | %s | %.2fs", c.ClientIP(), modelName, duration))
 					}
 				}
 				
-				logger.Info(fmt.Sprintf("%s | %s | %.2fs", c.ClientIP(), modelName, duration))
 				logger.RequestSuccess()
 				requestCompleted = true
 			} else {
