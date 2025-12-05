@@ -733,6 +733,12 @@ func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload 
 			totalTokens = int(tt)
 		}
 		
+		// 如果 token 都为 0，说明是被上游拦截的空响应，跳过日志记录
+		if totalTokens == 0 && promptTokens == 0 && completionTokens == 0 {
+			c.JSON(200, result)
+			return
+		}
+		
 		// 获取provider名称
 		model, provider, _ := findModel(modelName)
 		providerName := "unknown"
@@ -745,6 +751,10 @@ func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload 
 		}
 		
 		RecordTokenUsage(displayName, providerName, promptTokens, completionTokens, totalTokens)
+		logger.Info(fmt.Sprintf("%s | %s | %.2fs | Token: %d (in=%d, out=%d)", c.ClientIP(), modelName, duration, totalTokens, promptTokens, completionTokens))
+		logger.RequestSuccess()
+		c.JSON(200, result)
+		return
 	}
 
 	logger.Info(fmt.Sprintf("%s | %s | %.2fs", c.ClientIP(), modelName, duration))
