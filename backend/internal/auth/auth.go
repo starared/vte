@@ -140,15 +140,37 @@ func APIKeyAuth() gin.HandlerFunc {
 		}
 
 		apiKey := strings.TrimPrefix(authHeader, "Bearer ")
-		user, err := GetUserByAPIKey(apiKey)
-		if err != nil {
-			c.JSON(401, gin.H{"detail": "无效的 API Key"})
-			c.Abort()
+		if user, err := GetUserByAPIKey(apiKey); err == nil {
+			c.Set("user", user)
+			c.Next()
 			return
 		}
 
-		c.Set("user", user)
-		c.Next()
+		// 尝试临时 API Key
+		if tempKey, err := database.GetTempAPIKeyByToken(apiKey); err == nil {
+			if !tempKey.IsActive {
+				c.JSON(401, gin.H{"detail": "API Key 已禁用"})
+				c.Abort()
+				return
+			}
+			if tempKey.ExpiresAt != nil && time.Now().After(*tempKey.ExpiresAt) {
+				c.JSON(401, gin.H{"detail": "API Key 已过期"})
+				c.Abort()
+				return
+			}
+			if tempKey.MaxRequests > 0 && tempKey.UsedRequests >= tempKey.MaxRequests {
+				c.JSON(429, gin.H{"detail": "API Key 请求次数已用尽"})
+				c.Abort()
+				return
+			}
+
+			c.Set("temp_api_key", tempKey)
+			c.Next()
+			return
+		}
+
+		c.JSON(401, gin.H{"detail": "无效的 API Key"})
+		c.Abort()
 	}
 }
 

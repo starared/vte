@@ -156,7 +156,7 @@ func SetSystemPrompt(c *gin.Context) {
 	}
 
 	db := database.DB()
-	
+
 	// 保存提示词内容
 	_, err := db.Exec(`
 		INSERT INTO settings (key, value) VALUES ('system_prompt', ?)
@@ -197,10 +197,10 @@ func GetCustomErrorResponse(c *gin.Context) {
 	if err != nil {
 		rulesJSON = "[]"
 	}
-	
+
 	var rules []models.CustomErrorRule
 	json.Unmarshal([]byte(rulesJSON), &rules)
-	
+
 	c.JSON(200, gin.H{
 		"enabled": enabled == "true",
 		"rules":   rules,
@@ -216,7 +216,7 @@ func SetCustomErrorResponse(c *gin.Context) {
 	}
 
 	db := database.DB()
-	
+
 	// 保存启用状态
 	enabledStr := "false"
 	if req.Enabled {
@@ -250,21 +250,21 @@ func SetCustomErrorResponse(c *gin.Context) {
 func GetRateLimitSettings(c *gin.Context) {
 	db := database.DB()
 	var enabled, maxRequests, window string
-	
+
 	db.QueryRow("SELECT value FROM settings WHERE key = 'rate_limit_enabled'").Scan(&enabled)
 	db.QueryRow("SELECT value FROM settings WHERE key = 'rate_limit_max_requests'").Scan(&maxRequests)
 	db.QueryRow("SELECT value FROM settings WHERE key = 'rate_limit_window'").Scan(&window)
-	
+
 	maxReq, _ := strconv.Atoi(maxRequests)
 	windowSec, _ := strconv.Atoi(window)
-	
+
 	if maxReq <= 0 {
 		maxReq = 60
 	}
 	if windowSec <= 0 {
 		windowSec = 60
 	}
-	
+
 	c.JSON(200, gin.H{
 		"enabled":      enabled == "true",
 		"max_requests": maxReq,
@@ -279,18 +279,18 @@ func SetRateLimitSettings(c *gin.Context) {
 		c.JSON(400, gin.H{"detail": "无效的请求"})
 		return
 	}
-	
+
 	db := database.DB()
-	
+
 	enabledStr := "false"
 	if req.Enabled {
 		enabledStr = "true"
 	}
-	
+
 	db.Exec(`INSERT INTO settings (key, value) VALUES ('rate_limit_enabled', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, enabledStr, enabledStr)
 	db.Exec(`INSERT INTO settings (key, value) VALUES ('rate_limit_max_requests', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, strconv.Itoa(req.MaxRequests), strconv.Itoa(req.MaxRequests))
 	db.Exec(`INSERT INTO settings (key, value) VALUES ('rate_limit_window', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, strconv.Itoa(req.Window), strconv.Itoa(req.Window))
-	
+
 	logger.Info(fmt.Sprintf("%s | 更新速率限制 | 启用=%v 最大请求=%d 窗口=%ds", c.ClientIP(), req.Enabled, req.MaxRequests, req.Window))
 	c.JSON(200, gin.H{"message": "设置已更新"})
 }
@@ -299,19 +299,19 @@ func SetRateLimitSettings(c *gin.Context) {
 func GetConcurrencySettings(c *gin.Context) {
 	db := database.DB()
 	var enabled, limit string
-	
+
 	db.QueryRow("SELECT value FROM settings WHERE key = 'concurrency_enabled'").Scan(&enabled)
 	db.QueryRow("SELECT value FROM settings WHERE key = 'concurrency_limit'").Scan(&limit)
-	
+
 	limitNum, _ := strconv.Atoi(limit)
 	if limitNum <= 0 {
 		limitNum = 10
 	}
-	
+
 	c.JSON(200, gin.H{
-		"enabled":     enabled == "true",
-		"limit":       limitNum,
-		"current":     GetCurrentConcurrency(),
+		"enabled": enabled == "true",
+		"limit":   limitNum,
+		"current": GetCurrentConcurrency(),
 	})
 }
 
@@ -322,17 +322,17 @@ func SetConcurrencySettings(c *gin.Context) {
 		c.JSON(400, gin.H{"detail": "无效的请求"})
 		return
 	}
-	
+
 	db := database.DB()
-	
+
 	enabledStr := "false"
 	if req.Enabled {
 		enabledStr = "true"
 	}
-	
+
 	db.Exec(`INSERT INTO settings (key, value) VALUES ('concurrency_enabled', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, enabledStr, enabledStr)
 	db.Exec(`INSERT INTO settings (key, value) VALUES ('concurrency_limit', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, strconv.Itoa(req.Limit), strconv.Itoa(req.Limit))
-	
+
 	logger.Info(fmt.Sprintf("%s | 更新并发限制 | 启用=%v 限制=%d", c.ClientIP(), req.Enabled, req.Limit))
 	c.JSON(200, gin.H{"message": "设置已更新"})
 }
@@ -341,16 +341,16 @@ func SetConcurrencySettings(c *gin.Context) {
 func GetCustomRateLimitRules(c *gin.Context) {
 	db := database.DB()
 	var rulesJSON string
-	
+
 	err := db.QueryRow("SELECT value FROM settings WHERE key = 'custom_rate_limit_rules'").Scan(&rulesJSON)
 	if err != nil || rulesJSON == "" {
 		c.JSON(200, gin.H{"rules": []interface{}{}})
 		return
 	}
-	
+
 	var rules []map[string]interface{}
 	json.Unmarshal([]byte(rulesJSON), &rules)
-	
+
 	// 补充提供商名称
 	for i, rule := range rules {
 		if providerID, ok := rule["provider_id"].(float64); ok && providerID > 0 {
@@ -359,7 +359,7 @@ func GetCustomRateLimitRules(c *gin.Context) {
 			rules[i]["provider_name"] = name
 		}
 	}
-	
+
 	c.JSON(200, gin.H{"rules": rules})
 }
 
@@ -376,17 +376,17 @@ func SetCustomRateLimitRules(c *gin.Context) {
 			Enabled     bool   `json:"enabled"`
 		} `json:"rules"`
 	}
-	
+
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"detail": "无效的请求"})
 		return
 	}
-	
+
 	rulesJSON, _ := json.Marshal(req.Rules)
-	
+
 	db := database.DB()
 	db.Exec(`INSERT INTO settings (key, value) VALUES ('custom_rate_limit_rules', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, string(rulesJSON), string(rulesJSON))
-	
+
 	logger.Info(fmt.Sprintf("%s | 更新自定义速率限制规则 | %d条规则", c.ClientIP(), len(req.Rules)))
 	c.JSON(200, gin.H{"message": "设置已更新"})
 }

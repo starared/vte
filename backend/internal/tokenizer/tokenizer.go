@@ -15,36 +15,36 @@ var (
 // 模型到编码器的映射
 var modelEncodingMap = map[string]string{
 	// Claude 模型使用 cl100k_base（与 GPT-4 相同）
-	"claude":       "cl100k_base",
-	"claude-3":     "cl100k_base",
-	"claude-opus":  "cl100k_base",
+	"claude":        "cl100k_base",
+	"claude-3":      "cl100k_base",
+	"claude-opus":   "cl100k_base",
 	"claude-sonnet": "cl100k_base",
-	"claude-haiku": "cl100k_base",
-	
+	"claude-haiku":  "cl100k_base",
+
 	// GPT-4 系列
-	"gpt-4":        "cl100k_base",
-	"gpt-4o":       "cl100k_base",
-	"gpt-4-turbo":  "cl100k_base",
-	
+	"gpt-4":       "cl100k_base",
+	"gpt-4o":      "cl100k_base",
+	"gpt-4-turbo": "cl100k_base",
+
 	// GPT-3.5 系列
-	"gpt-3.5":      "cl100k_base",
-	"gpt-35":       "cl100k_base",
-	
+	"gpt-3.5": "cl100k_base",
+	"gpt-35":  "cl100k_base",
+
 	// 其他模型默认
-	"default":      "cl100k_base",
+	"default": "cl100k_base",
 }
 
 // getEncodingForModel 根据模型名称获取编码器名称
 func getEncodingForModel(modelName string) string {
 	modelLower := strings.ToLower(modelName)
-	
+
 	// 检查精确匹配
 	for prefix, encoding := range modelEncodingMap {
 		if strings.Contains(modelLower, prefix) {
 			return encoding
 		}
 	}
-	
+
 	return modelEncodingMap["default"]
 }
 
@@ -96,21 +96,21 @@ func CountMessagesTokens(messages []interface{}, modelName string) int {
 	}
 
 	totalTokens := 0
-	
+
 	// 每条消息有固定的 token 开销
 	// GPT-4/Claude: 每条消息约 3 token 开销（role + content 分隔符等）
 	tokensPerMessage := 3
-	
+
 	for _, msg := range messages {
 		if m, ok := msg.(map[string]interface{}); ok {
 			totalTokens += tokensPerMessage
-			
+
 			// role
 			if role, ok := m["role"].(string); ok {
 				tokens := enc.Encode(role, nil, nil)
 				totalTokens += len(tokens)
 			}
-			
+
 			// content
 			if content, ok := m["content"].(string); ok {
 				tokens := enc.Encode(content, nil, nil)
@@ -132,7 +132,7 @@ func CountMessagesTokens(messages []interface{}, modelName string) int {
 					}
 				}
 			}
-			
+
 			// name（如果有）
 			if name, ok := m["name"].(string); ok {
 				tokens := enc.Encode(name, nil, nil)
@@ -141,10 +141,10 @@ func CountMessagesTokens(messages []interface{}, modelName string) int {
 			}
 		}
 	}
-	
+
 	// 每个请求有 3 token 的固定开销
 	totalTokens += 3
-	
+
 	return totalTokens
 }
 
@@ -156,7 +156,7 @@ func estimateTokens(text string) int {
 	if len(text) == 0 {
 		return 0
 	}
-	
+
 	// 统计中文字符数量
 	chineseCount := 0
 	for _, r := range text {
@@ -164,7 +164,7 @@ func estimateTokens(text string) int {
 			chineseCount++
 		}
 	}
-	
+
 	// 中文按 1.5 字符/token，其他按 4 字符/token
 	otherCount := len(text) - chineseCount
 	tokens := int(float64(chineseCount)/1.5 + float64(otherCount)/4)

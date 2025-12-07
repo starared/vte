@@ -18,6 +18,10 @@
           <el-icon><Cpu /></el-icon>
           <span>模型管理</span>
         </el-menu-item>
+        <el-menu-item index="/temp-keys">
+          <el-icon><Key /></el-icon>
+          <span>临时 API</span>
+        </el-menu-item>
         <el-menu-item index="/logs">
           <el-icon><Document /></el-icon>
           <span>请求日志</span>

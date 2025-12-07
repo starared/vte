@@ -131,6 +131,15 @@ func Setup(cfg *config.Config) *gin.Engine {
 			settings.PUT("/custom-rate-limit", handlers.SetCustomRateLimitRules)
 		}
 
+		// 临时 API 密钥
+		tempKeys := api.Group("/temp-keys", auth.JWTAuth(), auth.AdminRequired())
+		{
+			tempKeys.GET("", handlers.ListTempAPIKeys)
+			tempKeys.POST("", handlers.CreateTempAPIKey)
+			tempKeys.PUT("/:id", handlers.UpdateTempAPIKey)
+			tempKeys.DELETE("/:id", handlers.DeleteTempAPIKey)
+		}
+
 		// 版本
 		api.GET("/version/check", handlers.CheckVersion)
 	}

@@ -12,6 +12,28 @@ type User struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
+// TempAPIKey 临时 API Key，用于受限访问
+type TempAPIKey struct {
+	ID               int            `json:"id"`
+	Name             string         `json:"name"`
+	Token            string         `json:"token"`
+	AllowedModels    []string       `json:"allowed_models"`
+	ModelLimits      map[string]int `json:"model_limits"`
+	ModelUsage       map[string]int `json:"model_usage"`
+	MaxRequests      int            `json:"max_requests"`
+	UsedRequests     int            `json:"used_requests"`
+	RateLimitCount   int            `json:"rate_limit_count"`   // 速率限制：请求数
+	RateLimitWindow  int            `json:"rate_limit_window"`  // 速率限制：时间窗口(秒)
+	RateLimitUnit    string         `json:"rate_limit_unit"`    // 速率限制单位: seconds, minutes, hours
+	ConcurrencyLimit int            `json:"concurrency_limit"` // 并发限制
+	ExpireDuration   int            `json:"expire_duration"`   // 有效期时长
+	ExpireUnit       string         `json:"expire_unit"`       // 有效期单位: minutes, hours, days
+	ExpiresAt        *time.Time     `json:"expires_at"`
+	IsActive         bool           `json:"is_active"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+}
+
 type Provider struct {
 	ID             int       `json:"id"`
 	Name           string    `json:"name"`
@@ -81,6 +103,35 @@ type LoginRequest struct {
 type TokenResponse struct {
 	AccessToken string `json:"access_token"`
 	TokenType   string `json:"token_type"`
+}
+
+// 临时 API Key 请求结构
+type TempAPIKeyCreateRequest struct {
+	Name             string         `json:"name"`
+	AllowedModels    []string       `json:"allowed_models" binding:"required"`
+	ModelLimits      map[string]int `json:"model_limits"`
+	MaxRequests      int            `json:"max_requests"`
+	RateLimitCount   int            `json:"rate_limit_count"`   // 速率限制：请求数
+	RateLimitWindow  int            `json:"rate_limit_window"`  // 速率限制：时间窗口
+	RateLimitUnit    string         `json:"rate_limit_unit"`    // 速率限制单位: seconds, minutes, hours
+	ConcurrencyLimit int            `json:"concurrency_limit"`  // 并发限制
+	ExpireDuration   int            `json:"expire_duration"`    // 有效期时长
+	ExpireUnit       string         `json:"expire_unit"`        // minutes, hours, days
+	IsActive         *bool          `json:"is_active"`
+}
+
+type TempAPIKeyUpdateRequest struct {
+	Name             *string        `json:"name"`
+	AllowedModels    []string       `json:"allowed_models"`
+	ModelLimits      map[string]int `json:"model_limits"`
+	MaxRequests      *int           `json:"max_requests"`
+	RateLimitCount   *int           `json:"rate_limit_count"`
+	RateLimitWindow  *int           `json:"rate_limit_window"`
+	RateLimitUnit    *string        `json:"rate_limit_unit"`
+	ConcurrencyLimit *int           `json:"concurrency_limit"`
+	ExpireDuration   *int           `json:"expire_duration"`
+	ExpireUnit       *string        `json:"expire_unit"`
+	IsActive         *bool          `json:"is_active"`
 }
 
 type ProviderCreate struct {

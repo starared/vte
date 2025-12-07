@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite"
 	"golang.org/x/crypto/bcrypt"
+	_ "modernc.org/sqlite"
 )
 
 var db *sql.DB
@@ -30,12 +30,12 @@ func Init(dbPath string) error {
 	// SQLite 并发优化
 	db.SetMaxOpenConns(1) // SQLite 只支持单写入
 	db.SetMaxIdleConns(1)
-	
+
 	// 设置 PRAGMA 优化
-	db.Exec("PRAGMA busy_timeout=30000")   // 等待30秒而不是立即失败
-	db.Exec("PRAGMA synchronous=NORMAL")   // 提升性能
-	db.Exec("PRAGMA cache_size=10000")     // 增加缓存
-	db.Exec("PRAGMA temp_store=MEMORY")    // 临时表存内存
+	db.Exec("PRAGMA busy_timeout=30000") // 等待30秒而不是立即失败
+	db.Exec("PRAGMA synchronous=NORMAL") // 提升性能
+	db.Exec("PRAGMA cache_size=10000")   // 增加缓存
+	db.Exec("PRAGMA temp_store=MEMORY")  // 临时表存内存
 
 	// 创建表
 	return createTables()
@@ -103,6 +103,27 @@ func createTables() error {
 			FOREIGN KEY (provider_id) REFERENCES providers(id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_provider_api_keys_provider ON provider_api_keys(provider_id)`,
+		`CREATE TABLE IF NOT EXISTS temp_api_keys (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT,
+			token TEXT UNIQUE NOT NULL,
+			allowed_models TEXT NOT NULL,
+			model_limits TEXT,
+			model_usage TEXT,
+			max_requests INTEGER DEFAULT 0,
+			used_requests INTEGER DEFAULT 0,
+			rate_limit_count INTEGER DEFAULT 0,
+			rate_limit_window INTEGER DEFAULT 0,
+			rate_limit_unit TEXT DEFAULT '',
+			concurrency_limit INTEGER DEFAULT 0,
+			expire_duration INTEGER DEFAULT 0,
+			expire_unit TEXT DEFAULT '',
+			expires_at DATETIME,
+			is_active INTEGER DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_temp_api_keys_token ON temp_api_keys(token)`,
 		`CREATE TABLE IF NOT EXISTS token_usage (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			model_name TEXT NOT NULL,
@@ -139,6 +160,13 @@ func migrateAddMissingColumns() {
 	db.Exec("ALTER TABLE provider_api_keys ADD COLUMN last_used_at DATETIME")
 	// 检查并添加 custom_name 列（用于标记用户自定义的模型显示名称）
 	db.Exec("ALTER TABLE models ADD COLUMN custom_name INTEGER DEFAULT 0")
+	// 临时 API Key 相关列
+	db.Exec("ALTER TABLE temp_api_keys ADD COLUMN rate_limit_count INTEGER DEFAULT 0")
+	db.Exec("ALTER TABLE temp_api_keys ADD COLUMN rate_limit_window INTEGER DEFAULT 0")
+	db.Exec("ALTER TABLE temp_api_keys ADD COLUMN rate_limit_unit TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE temp_api_keys ADD COLUMN concurrency_limit INTEGER DEFAULT 0")
+	db.Exec("ALTER TABLE temp_api_keys ADD COLUMN expire_duration INTEGER DEFAULT 0")
+	db.Exec("ALTER TABLE temp_api_keys ADD COLUMN expire_unit TEXT DEFAULT ''")
 }
 
 // migrateProviderAPIKeys 将 providers 表中的 api_key 迁移到 provider_api_keys 表

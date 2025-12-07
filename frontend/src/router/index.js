@@ -16,6 +16,7 @@ const routes = [
       { path: 'dashboard', name: 'Dashboard', component: () => import('../views/Dashboard.vue') },
       { path: 'providers', name: 'Providers', component: () => import('../views/Providers.vue') },
       { path: 'models', name: 'Models', component: () => import('../views/Models.vue') },
+      { path: 'temp-keys', name: 'TempKeys', component: () => import('../views/TempKeys.vue') },
       { path: 'logs', name: 'Logs', component: () => import('../views/Logs.vue') },
       { path: 'token-stats', name: 'TokenStats', component: () => import('../views/TokenStats.vue') },
       { path: 'settings', name: 'Settings', component: () => import('../views/Settings.vue') },

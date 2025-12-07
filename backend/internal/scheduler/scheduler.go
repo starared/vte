@@ -37,17 +37,17 @@ func dailyCleanupTask() {
 		now := GetBeijingTime()
 		// 计算下一个北京时间下午3点
 		next3PM := time.Date(now.Year(), now.Month(), now.Day(), 15, 0, 0, 0, beijingLoc)
-		
+
 		// 如果已经过了今天的3点，则设置为明天的3点
 		if now.After(next3PM) {
 			next3PM = next3PM.Add(24 * time.Hour)
 		}
-		
+
 		// 等待到北京时间下午3点
 		duration := next3PM.Sub(now)
 		logger.Info("下次token统计重置时间(北京时间): " + next3PM.Format("2006-01-02 15:04:05 MST"))
 		time.Sleep(duration)
-		
+
 		// 执行清理
 		logger.Info("执行每日token记录清理任务(北京时间15:00)")
 		if err := handlers.CleanOldTokenRecords(); err != nil {
@@ -55,7 +55,7 @@ func dailyCleanupTask() {
 		} else {
 			logger.Info("token记录清理完成")
 		}
-		
+
 		// 同时重置日志统计
 		logger.ResetStats()
 		logger.Info("日志统计已重置")

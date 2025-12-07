@@ -17,14 +17,15 @@ import (
 	"github.com/gorilla/websocket"
 	"vte/internal/database"
 	"vte/internal/logger"
+	"vte/internal/models"
 	"vte/internal/proxy"
 	"vte/internal/tokenizer"
 )
 
 // 并发控制
 var (
-	currentConcurrency int64          // 当前并发数
-	concurrencyMu      sync.RWMutex   // 并发设置锁
+	currentConcurrency int64        // 当前并发数
+	concurrencyMu      sync.RWMutex // 并发设置锁
 )
 
 // 自定义并发控制 - 基于提供商/模型
@@ -36,61 +37,61 @@ var (
 // CustomConcurrencyRule 自定义并发限制规则
 type CustomConcurrencyRule struct {
 	ID           int    `json:"id"`
-	Name         string `json:"name"`           // 规则名称
-	ProviderID   int    `json:"provider_id"`    // 提供商ID，0表示所有
-	ProviderName string `json:"provider_name"`  // 提供商名称（仅显示用）
-	ModelName    string `json:"model_name"`     // 模型名称，空表示所有
-	Limit        int    `json:"limit"`          // 最大并发数
-	Enabled      bool   `json:"enabled"`        // 是否启用
+	Name         string `json:"name"`          // 规则名称
+	ProviderID   int    `json:"provider_id"`   // 提供商ID，0表示所有
+	ProviderName string `json:"provider_name"` // 提供商名称（仅显示用）
+	ModelName    string `json:"model_name"`    // 模型名称，空表示所有
+	Limit        int    `json:"limit"`         // 最大并发数
+	Enabled      bool   `json:"enabled"`       // 是否启用
 }
 
 // 速率限制 - 使用滑动窗口
 var (
-	rateLimitMu     sync.Mutex
-	requestTimes    []time.Time // 请求时间记录
+	rateLimitMu  sync.Mutex
+	requestTimes []time.Time // 请求时间记录
 )
 
 // 自定义速率限制 - 基于提供商/模型
 var (
-	customRateLimitMu     sync.Mutex
-	customRequestTimes    = make(map[string][]time.Time) // key: "provider:xxx" 或 "model:xxx" 或 "provider:xxx:model:yyy"
+	customRateLimitMu  sync.Mutex
+	customRequestTimes = make(map[string][]time.Time) // key: "provider:xxx" 或 "model:xxx" 或 "provider:xxx:model:yyy"
 )
 
 // CustomRateLimitRule 自定义速率限制规则
 type CustomRateLimitRule struct {
 	ID           int    `json:"id"`
-	Name         string `json:"name"`           // 规则名称
-	ProviderID   int    `json:"provider_id"`    // 提供商ID，0表示所有
-	ProviderName string `json:"provider_name"`  // 提供商名称（仅显示用）
-	ModelName    string `json:"model_name"`     // 模型名称，空表示所有
-	MaxRequests  int    `json:"max_requests"`   // 最大请求数
-	Window       int    `json:"window"`         // 时间窗口（秒）
-	Enabled      bool   `json:"enabled"`        // 是否启用
+	Name         string `json:"name"`          // 规则名称
+	ProviderID   int    `json:"provider_id"`   // 提供商ID，0表示所有
+	ProviderName string `json:"provider_name"` // 提供商名称（仅显示用）
+	ModelName    string `json:"model_name"`    // 模型名称，空表示所有
+	MaxRequests  int    `json:"max_requests"`  // 最大请求数
+	Window       int    `json:"window"`        // 时间窗口（秒）
+	Enabled      bool   `json:"enabled"`       // 是否启用
 }
 
 // getRateLimitSettings 获取速率限制设置
 func getRateLimitSettings() (enabled bool, maxRequests int, windowSeconds int) {
 	db := database.DB()
 	var enabledStr, maxReqStr, windowStr string
-	
+
 	err := db.QueryRow("SELECT value FROM settings WHERE key = 'rate_limit_enabled'").Scan(&enabledStr)
 	if err != nil || enabledStr != "true" {
 		return false, 0, 0
 	}
-	
+
 	db.QueryRow("SELECT value FROM settings WHERE key = 'rate_limit_max_requests'").Scan(&maxReqStr)
 	db.QueryRow("SELECT value FROM settings WHERE key = 'rate_limit_window'").Scan(&windowStr)
-	
+
 	maxRequests, _ = strconv.Atoi(maxReqStr)
 	windowSeconds, _ = strconv.Atoi(windowStr)
-	
+
 	if maxRequests <= 0 {
 		maxRequests = 60
 	}
 	if windowSeconds <= 0 {
 		windowSeconds = 60
 	}
-	
+
 	return true, maxRequests, windowSeconds
 }
 
@@ -100,13 +101,13 @@ func checkRateLimit() bool {
 	if !enabled {
 		return true
 	}
-	
+
 	rateLimitMu.Lock()
 	defer rateLimitMu.Unlock()
-	
+
 	now := time.Now()
 	windowStart := now.Add(-time.Duration(windowSeconds) * time.Second)
-	
+
 	// 清理过期记录
 	validTimes := make([]time.Time, 0, len(requestTimes))
 	for _, t := range requestTimes {
@@ -115,12 +116,12 @@ func checkRateLimit() bool {
 		}
 	}
 	requestTimes = validTimes
-	
+
 	// 检查是否超限
 	if len(requestTimes) >= maxRequests {
 		return false
 	}
-	
+
 	// 记录本次请求
 	requestTimes = append(requestTimes, now)
 	return true
@@ -134,7 +135,7 @@ func getCustomRateLimitRules() []CustomRateLimitRule {
 	if err != nil || rulesJSON == "" {
 		return nil
 	}
-	
+
 	var rules []CustomRateLimitRule
 	json.Unmarshal([]byte(rulesJSON), &rules)
 	return rules
@@ -147,21 +148,21 @@ func checkCustomRateLimit(providerID int, providerName string, modelName string)
 	if len(rules) == 0 {
 		return true, ""
 	}
-	
+
 	customRateLimitMu.Lock()
 	defer customRateLimitMu.Unlock()
-	
+
 	now := time.Now()
-	
+
 	for _, rule := range rules {
 		if !rule.Enabled {
 			continue
 		}
-		
+
 		// 检查规则是否匹配
 		matched := false
 		var key string
-		
+
 		if rule.ProviderID > 0 && rule.ModelName != "" {
 			// 特定提供商的特定模型
 			if rule.ProviderID == providerID && rule.ModelName == modelName {
@@ -181,14 +182,14 @@ func checkCustomRateLimit(providerID int, providerName string, modelName string)
 				key = fmt.Sprintf("model:%s", modelName)
 			}
 		}
-		
+
 		if !matched {
 			continue
 		}
-		
+
 		// 检查此规则的速率限制
 		windowStart := now.Add(-time.Duration(rule.Window) * time.Second)
-		
+
 		// 清理过期记录
 		times := customRequestTimes[key]
 		validTimes := make([]time.Time, 0, len(times))
@@ -198,16 +199,16 @@ func checkCustomRateLimit(providerID int, providerName string, modelName string)
 			}
 		}
 		customRequestTimes[key] = validTimes
-		
+
 		// 检查是否超限
 		if len(validTimes) >= rule.MaxRequests {
 			return false, rule.Name
 		}
-		
+
 		// 记录本次请求
 		customRequestTimes[key] = append(validTimes, now)
 	}
-	
+
 	return true, ""
 }
 
@@ -215,15 +216,15 @@ func checkCustomRateLimit(providerID int, providerName string, modelName string)
 func getConcurrencyLimit() int {
 	db := database.DB()
 	var enabledStr, limitStr string
-	
+
 	err := db.QueryRow("SELECT value FROM settings WHERE key = 'concurrency_enabled'").Scan(&enabledStr)
 	if err != nil || enabledStr != "true" {
 		return 0 // 0 表示不限制
 	}
-	
+
 	db.QueryRow("SELECT value FROM settings WHERE key = 'concurrency_limit'").Scan(&limitStr)
 	limit, _ := strconv.Atoi(limitStr)
-	
+
 	if limit <= 0 {
 		return 0
 	}
@@ -237,12 +238,12 @@ func acquireConcurrency() bool {
 		atomic.AddInt64(&currentConcurrency, 1)
 		return true
 	}
-	
+
 	current := atomic.LoadInt64(&currentConcurrency)
 	if current >= int64(limit) {
 		return false
 	}
-	
+
 	atomic.AddInt64(&currentConcurrency, 1)
 	return true
 }
@@ -285,12 +286,12 @@ func getCustomErrorRules(db *sql.DB) (bool, []CustomErrorRule) {
 	if err != nil || enabled != "true" {
 		return false, nil
 	}
-	
+
 	err = db.QueryRow("SELECT value FROM settings WHERE key = 'custom_error_rules'").Scan(&rulesJSON)
 	if err != nil {
 		return false, nil
 	}
-	
+
 	var rules []CustomErrorRule
 	json.Unmarshal([]byte(rulesJSON), &rules)
 	return true, rules
@@ -302,7 +303,7 @@ func checkCustomErrorResponse(db *sql.DB, errMsg string) (bool, string) {
 	if !enabled || len(rules) == 0 {
 		return false, ""
 	}
-	
+
 	errMsgLower := strings.ToLower(errMsg)
 	for _, rule := range rules {
 		if rule.Keyword != "" && strings.Contains(errMsgLower, strings.ToLower(rule.Keyword)) {
@@ -341,10 +342,10 @@ func buildFakeResponse(content string, model string) map[string]interface{} {
 func buildFakeStreamResponse(content string, model string) string {
 	id := "chatcmpl-fake-" + fmt.Sprintf("%d", time.Now().UnixNano())
 	created := time.Now().Unix()
-	
+
 	// 构建流式响应数据
 	var sb strings.Builder
-	
+
 	// 第一个chunk - role
 	chunk1 := map[string]interface{}{
 		"id":      id,
@@ -365,7 +366,7 @@ func buildFakeStreamResponse(content string, model string) string {
 	sb.WriteString("data: ")
 	sb.WriteString(string(data1))
 	sb.WriteString("\n\n")
-	
+
 	// 第二个chunk - content
 	chunk2 := map[string]interface{}{
 		"id":      id,
@@ -386,7 +387,7 @@ func buildFakeStreamResponse(content string, model string) string {
 	sb.WriteString("data: ")
 	sb.WriteString(string(data2))
 	sb.WriteString("\n\n")
-	
+
 	// 第三个chunk - finish
 	chunk3 := map[string]interface{}{
 		"id":      id,
@@ -405,10 +406,10 @@ func buildFakeStreamResponse(content string, model string) string {
 	sb.WriteString("data: ")
 	sb.WriteString(string(data3))
 	sb.WriteString("\n\n")
-	
+
 	// 结束标记
 	sb.WriteString("data: [DONE]\n\n")
-	
+
 	return sb.String()
 }
 
@@ -457,6 +458,16 @@ var upgrader = websocket.Upgrader{
 
 func OpenAIListModels(c *gin.Context) {
 	db := database.DB()
+
+	var allowed map[string]bool
+	if tk, ok := c.Get("temp_api_key"); ok {
+		if temp, ok2 := tk.(*models.TempAPIKey); ok2 {
+			allowed = make(map[string]bool)
+			for _, m := range temp.AllowedModels {
+				allowed[m] = true
+			}
+		}
+	}
 	rows, err := db.Query(`
 		SELECT m.display_name, m.original_id, p.name
 		FROM models m
@@ -487,6 +498,12 @@ func OpenAIListModels(c *gin.Context) {
 			ownedBy = *providerName
 		}
 
+		if allowed != nil {
+			if !allowed[modelID] {
+				continue
+			}
+		}
+
 		data = append(data, gin.H{
 			"id":       modelID,
 			"object":   "model",
@@ -500,7 +517,19 @@ func OpenAIListModels(c *gin.Context) {
 
 func OpenAIChatCompletions(c *gin.Context) {
 	db := database.DB()
-	
+
+	var tempKey *models.TempAPIKey
+	var allowedModels map[string]bool
+	if tk, ok := c.Get("temp_api_key"); ok {
+		if t, ok2 := tk.(*models.TempAPIKey); ok2 {
+			tempKey = t
+			allowedModels = make(map[string]bool)
+			for _, m := range tempKey.AllowedModels {
+				allowedModels[m] = true
+			}
+		}
+	}
+
 	// 先解析请求获取模型名和stream参数，用于后续的自定义错误响应
 	var payload map[string]interface{}
 	if err := c.ShouldBindJSON(&payload); err != nil {
@@ -518,7 +547,19 @@ func OpenAIChatCompletions(c *gin.Context) {
 	if s, ok := payload["stream"].(bool); ok {
 		stream = s
 	}
-	
+
+	// 临时密钥校验（过期、可用模型）
+	if tempKey != nil {
+		if tempKey.ExpiresAt != nil && time.Now().After(*tempKey.ExpiresAt) {
+			c.JSON(401, gin.H{"detail": "API Key 已过期"})
+			return
+		}
+		if len(allowedModels) > 0 && !allowedModels[modelName] {
+			c.JSON(403, gin.H{"detail": "当前密钥无权使用该模型"})
+			return
+		}
+	}
+
 	// 检查速率限制
 	if !checkRateLimit() {
 		errMsg := "请求过于频繁，请稍后重试 rate_limit_exceeded"
@@ -543,7 +584,7 @@ func OpenAIChatCompletions(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	// 检查并发限制
 	if !acquireConcurrency() {
 		errMsg := "服务器繁忙，请稍后重试 concurrency_limit_exceeded"
@@ -632,6 +673,29 @@ func OpenAIChatCompletions(c *gin.Context) {
 		return
 	}
 
+	// 临时密钥用量消耗
+	if tempKey != nil {
+		switch err := database.ConsumeTempAPIUsage(tempKey.ID, modelName); err {
+		case nil:
+			// ok
+		case database.ErrTempAPILimitExceeded:
+			c.JSON(429, gin.H{"detail": "API Key 请求次数已用尽"})
+			return
+		case database.ErrTempAPIModelExceeded:
+			c.JSON(429, gin.H{"detail": "该模型的可用次数已用尽"})
+			return
+		case database.ErrTempAPIExpired:
+			c.JSON(401, gin.H{"detail": "API Key 已过期"})
+			return
+		case database.ErrTempAPIDisabled:
+			c.JSON(401, gin.H{"detail": "API Key 已禁用"})
+			return
+		default:
+			c.JSON(500, gin.H{"detail": "更新用量失败"})
+			return
+		}
+	}
+
 	// 检查自定义速率限制
 	displayName := modelName
 	if model.DisplayName != "" {
@@ -701,7 +765,7 @@ func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload 
 
 	if err != nil {
 		errMsg := err.Error()
-		
+
 		// 检查是否有自定义错误响应
 		db := database.DB()
 		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
@@ -710,7 +774,7 @@ func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload 
 			c.JSON(200, buildFakeResponse(customResponse, modelName))
 			return
 		}
-		
+
 		logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), modelName, duration, err))
 		logger.RequestError()
 		c.JSON(500, gin.H{"detail": fmt.Sprintf("请求失败: %v", err)})
@@ -722,7 +786,7 @@ func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload 
 		promptTokens := 0
 		completionTokens := 0
 		totalTokens := 0
-		
+
 		if pt, ok := usage["prompt_tokens"].(float64); ok {
 			promptTokens = int(pt)
 		}
@@ -732,13 +796,13 @@ func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload 
 		if tt, ok := usage["total_tokens"].(float64); ok {
 			totalTokens = int(tt)
 		}
-		
+
 		// 如果 token 都为 0，说明是被上游拦截的空响应，跳过日志记录
 		if totalTokens == 0 && promptTokens == 0 && completionTokens == 0 {
 			c.JSON(200, result)
 			return
 		}
-		
+
 		// 获取provider名称
 		model, provider, _ := findModel(modelName)
 		providerName := "unknown"
@@ -749,7 +813,7 @@ func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload 
 		if model != nil && model.DisplayName != "" {
 			displayName = model.DisplayName
 		}
-		
+
 		RecordTokenUsage(displayName, providerName, promptTokens, completionTokens, totalTokens)
 		logger.Info(fmt.Sprintf("%s | %s | %.2fs | Token: %d (in=%d, out=%d)", c.ClientIP(), modelName, duration, totalTokens, promptTokens, completionTokens))
 		logger.RequestSuccess()
@@ -768,13 +832,13 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 	if err != nil {
 		duration := time.Since(startTime).Seconds()
 		errMsg := err.Error()
-		
+
 		// 检查是否有自定义错误响应
 		db := database.DB()
 		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
 			logger.Info(fmt.Sprintf("%s | %s | %.2fs | 自定义响应(原错误: %s)", c.ClientIP(), modelName, duration, errMsg))
 			logger.RequestSuccess()
-			
+
 			// 返回伪造的流式响应
 			c.Header("Content-Type", "text/event-stream")
 			c.Header("Cache-Control", "no-cache")
@@ -782,7 +846,7 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 			c.String(200, buildFakeStreamResponse(customResponse, modelName))
 			return
 		}
-		
+
 		logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), modelName, duration, err))
 		logger.RequestError()
 		c.JSON(500, gin.H{"detail": fmt.Sprintf("请求失败: %v", err)})
@@ -794,13 +858,13 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 		body, _ := io.ReadAll(resp.Body)
 		bodyStr := string(body)
 		duration := time.Since(startTime).Seconds()
-		
+
 		// 检查是否有自定义错误响应
 		db := database.DB()
 		if matched, customResponse := checkCustomErrorResponse(db, bodyStr); matched {
 			logger.Info(fmt.Sprintf("%s | %s | %.2fs | 自定义响应(原错误: status %d)", c.ClientIP(), modelName, duration, resp.StatusCode))
 			logger.RequestSuccess()
-			
+
 			// 返回伪造的流式响应
 			c.Header("Content-Type", "text/event-stream")
 			c.Header("Cache-Control", "no-cache")
@@ -808,7 +872,7 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 			c.String(200, buildFakeStreamResponse(customResponse, modelName))
 			return
 		}
-		
+
 		logger.Error(fmt.Sprintf("%s | %s | %.2fs | status %d: %s", c.ClientIP(), modelName, duration, resp.StatusCode, bodyStr))
 		logger.RequestError()
 		c.JSON(resp.StatusCode, gin.H{"detail": bodyStr})
@@ -824,29 +888,29 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 	var totalPromptTokens, totalCompletionTokens, totalTotalTokens int
 	// 用于收集输出内容（当 API 不返回 usage 时使用 tiktoken 计算）
 	var outputContent strings.Builder
-	
+
 	// 使用 tiktoken 精确计算输入 token 数
 	var inputTokens int
 	if messages, ok := payload["messages"].([]interface{}); ok {
 		inputTokens = tokenizer.CountMessagesTokens(messages, modelName)
 	}
-	
+
 	// 用于跟踪请求是否已完成统计
 	requestCompleted := false
-	
+
 	// 用于处理跨 buffer 的 SSE 数据
 	var sseBuffer strings.Builder
-	
+
 	c.Stream(func(w io.Writer) bool {
 		buf := make([]byte, 4096)
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			data := string(buf[:n])
-			
+
 			// 将数据追加到缓冲区
 			sseBuffer.WriteString(data)
 			bufferContent := sseBuffer.String()
-			
+
 			// 按完整的行处理
 			lastNewline := strings.LastIndex(bufferContent, "\n")
 			if lastNewline == -1 {
@@ -854,13 +918,13 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 				w.Write(buf[:n])
 				return true
 			}
-			
+
 			// 处理完整的行
 			completeData := bufferContent[:lastNewline+1]
 			// 保留不完整的部分
 			sseBuffer.Reset()
 			sseBuffer.WriteString(bufferContent[lastNewline+1:])
-			
+
 			// 尝试解析SSE数据中的usage信息
 			if strings.Contains(completeData, "\"usage\"") {
 				lines := strings.Split(completeData, "\n")
@@ -885,7 +949,7 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 					}
 				}
 			}
-			
+
 			// 收集输出内容（用于 tiktoken 计算 token）
 			lines := strings.Split(completeData, "\n")
 			for _, line := range lines {
@@ -906,7 +970,7 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 					}
 				}
 			}
-			
+
 			w.Write(buf[:n])
 			return true
 		}
@@ -923,7 +987,7 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 				if model != nil && model.DisplayName != "" {
 					displayName = model.DisplayName
 				}
-				
+
 				// 记录token使用情况并打印日志（合并为一行）
 				if totalTotalTokens > 0 {
 					// API返回了准确的usage信息
@@ -933,7 +997,7 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 					// API没有返回usage，使用 tiktoken 精确计算
 					outputText := outputContent.String()
 					outputTokens := tokenizer.CountTokens(outputText, modelName)
-					
+
 					if inputTokens > 0 || outputTokens > 0 {
 						totalTokens := inputTokens + outputTokens
 						RecordTokenUsage(displayName, providerName, inputTokens, outputTokens, totalTokens)
@@ -942,7 +1006,7 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 						logger.Info(fmt.Sprintf("%s | %s | %.2fs", c.ClientIP(), modelName, duration))
 					}
 				}
-				
+
 				logger.RequestSuccess()
 				requestCompleted = true
 			} else {
@@ -954,7 +1018,7 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 		}
 		return true
 	})
-	
+
 	// 如果流被中断但没有正常完成统计，记录为成功（数据可能已部分发送）
 	if !requestCompleted {
 		duration := time.Since(startTime).Seconds()
@@ -1085,7 +1149,6 @@ func scanModelProvider(row *sql.Row) (*modelInfo, *providerInfo, error) {
 	return &model, &provider, nil
 }
 
-
 // OpenAIChatCompletionsWS 处理 WebSocket 连接的聊天完成请求
 func OpenAIChatCompletionsWS(c *gin.Context) {
 	// 从查询参数或 header 获取 API Key
@@ -1205,11 +1268,11 @@ func OpenAIChatCompletionsWS(c *gin.Context) {
 
 		// 流式转发响应
 		reader := bufio.NewReader(resp.Body)
-		
+
 		// Token 统计变量
 		var totalPromptTokens, totalCompletionTokens, totalTotalTokens int
 		var estimatedOutputContent strings.Builder
-		
+
 		// 估算输入 token
 		estimatedInputChars := 0
 		if messages, ok := payload["messages"].([]interface{}); ok {
@@ -1221,7 +1284,7 @@ func OpenAIChatCompletionsWS(c *gin.Context) {
 				}
 			}
 		}
-		
+
 		for {
 			line, err := reader.ReadBytes('\n')
 			if err != nil {
@@ -1280,7 +1343,7 @@ func OpenAIChatCompletionsWS(c *gin.Context) {
 		resp.Body.Close()
 
 		duration := time.Since(startTime).Seconds()
-		
+
 		// 记录 token 使用情况
 		displayName := modelName
 		if model != nil && model.DisplayName != "" {
@@ -1290,7 +1353,7 @@ func OpenAIChatCompletionsWS(c *gin.Context) {
 		if provider != nil {
 			providerName = provider.Name
 		}
-		
+
 		if totalTotalTokens > 0 {
 			RecordTokenUsage(displayName, providerName, totalPromptTokens, totalCompletionTokens, totalTotalTokens)
 			logger.Info(fmt.Sprintf("WebSocket | %s | Token: %d", modelName, totalTotalTokens))
@@ -1311,7 +1374,7 @@ func OpenAIChatCompletionsWS(c *gin.Context) {
 				logger.Info(fmt.Sprintf("WebSocket | %s | Token估算: ~%d", modelName, estimatedTotal))
 			}
 		}
-		
+
 		logger.Info(fmt.Sprintf("WebSocket | %s | %.2fs", modelName, duration))
 		logger.RequestSuccess()
 	}
