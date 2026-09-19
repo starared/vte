@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -21,7 +22,7 @@ func validateAllowedModels(names []string) (map[string]bool, error) {
         WHERE is_active = 1
     `)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -47,7 +48,7 @@ func validateAllowedModels(names []string) (map[string]bool, error) {
 	}
 
 	if len(missing) > 0 {
-		return nil, nil // 忽略不存在的模型
+		return nil, fmt.Errorf("以下模型不存在或未启用: %v", missing)
 	}
 
 	allowedSet := make(map[string]bool)
@@ -105,7 +106,19 @@ func CreateTempAPIKey(c *gin.Context) {
 		return
 	}
 
-	allowedSet, _ := validateAllowedModels(req.AllowedModels)
+	if err := validateTempWindows(req.RateLimitCount, req.RateLimitWindow, req.RateLimitUnit, req.ExpireDuration, req.ExpireUnit); err != nil {
+		c.JSON(400, gin.H{"detail": err.Error()})
+		return
+	}
+	allowedSet, validationErr := validateAllowedModels(req.AllowedModels)
+	if validationErr != nil {
+		c.JSON(400, gin.H{"detail": validationErr.Error()})
+		return
+	}
+	if req.MaxRequests < 0 || req.ConcurrencyLimit < 0 || req.RateLimitCount < 0 || req.RateLimitWindow < 0 || req.ExpireDuration < 0 || req.ExpireDuration > 36500 || req.RateLimitWindow > 31536000 {
+		c.JSON(400, gin.H{"detail": "额度和时间参数超出有效范围"})
+		return
+	}
 
 	if req.ModelLimits == nil {
 		req.ModelLimits = map[string]int{}
@@ -150,42 +163,51 @@ func UpdateTempAPIKey(c *gin.Context) {
 		return
 	}
 
-	// 校验有效期设置
-	if req.ExpireDuration != nil && *req.ExpireDuration > 0 {
-		if req.ExpireUnit == nil || *req.ExpireUnit == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "请选择有效期单位"})
+	for _, n := range []*int{req.MaxRequests, req.ConcurrencyLimit, req.RateLimitCount, req.RateLimitWindow, req.ExpireDuration} {
+		if n != nil && *n < 0 {
+			c.JSON(400, gin.H{"detail": "额度和时间参数不能为负数"})
 			return
 		}
 	}
-	if req.ExpireUnit != nil && *req.ExpireUnit != "" && *req.ExpireUnit != "minutes" && *req.ExpireUnit != "hours" && *req.ExpireUnit != "days" {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的有效期单位"})
+	if req.ExpireDuration != nil && *req.ExpireDuration > 36500 || req.RateLimitWindow != nil && *req.RateLimitWindow > 31536000 {
+		c.JSON(400, gin.H{"detail": "时间参数超出有效范围"})
 		return
 	}
-
-	// 校验速率限制
-	if req.RateLimitCount != nil && *req.RateLimitCount > 0 {
-		if req.RateLimitWindow == nil || *req.RateLimitWindow <= 0 {
-			// 获取当前值
-			current, err := database.GetTempAPIKeyByID(id)
-			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"detail": "未找到临时密钥"})
-				return
-			}
-			if current.RateLimitWindow <= 0 {
-				c.JSON(http.StatusBadRequest, gin.H{"detail": "请设置速率限制的时间窗口"})
-				return
-			}
-		}
-	}
-	if req.RateLimitUnit != nil && *req.RateLimitUnit != "" && *req.RateLimitUnit != "seconds" && *req.RateLimitUnit != "minutes" && *req.RateLimitUnit != "hours" {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "无效的速率限制单位"})
+	current, err := database.GetTempAPIKeyByID(id)
+	if err != nil {
+		c.JSON(404, gin.H{"detail": "未找到临时密钥"})
 		return
 	}
-
+	rateCount, rateWindow, rateUnit := current.RateLimitCount, current.RateLimitWindow, current.RateLimitUnit
+	expiry, expiryUnit := current.ExpireDuration, current.ExpireUnit
+	if req.RateLimitCount != nil {
+		rateCount = *req.RateLimitCount
+	}
+	if req.RateLimitWindow != nil {
+		rateWindow = *req.RateLimitWindow
+	}
+	if req.RateLimitUnit != nil {
+		rateUnit = *req.RateLimitUnit
+	}
+	if req.ExpireDuration != nil {
+		expiry = *req.ExpireDuration
+	}
+	if req.ExpireUnit != nil {
+		expiryUnit = *req.ExpireUnit
+	}
+	if err := validateTempWindows(rateCount, rateWindow, rateUnit, expiry, expiryUnit); err != nil {
+		c.JSON(400, gin.H{"detail": err.Error()})
+		return
+	}
 	// 如果更新了模型，需要校验
 	var allowedSet map[string]bool
 	if len(req.AllowedModels) > 0 {
-		allowedSet, _ = validateAllowedModels(req.AllowedModels)
+		var validationErr error
+		allowedSet, validationErr = validateAllowedModels(req.AllowedModels)
+		if validationErr != nil {
+			c.JSON(400, gin.H{"detail": validationErr.Error()})
+			return
+		}
 	}
 
 	if req.ModelLimits != nil && len(req.ModelLimits) > 0 {
@@ -234,4 +256,32 @@ func DeleteTempAPIKey(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
+}
+
+func validateTempWindows(count, window int, unit string, expiry int, expiryUnit string) error {
+	scale := 1
+	switch unit {
+	case "", "seconds":
+	case "minutes":
+		scale = 60
+	case "hours":
+		scale = 3600
+	default:
+		return fmt.Errorf("无效的速率限制单位")
+	}
+	if count > 0 && window <= 0 {
+		return fmt.Errorf("请设置速率限制的时间窗口")
+	}
+	if window < 0 || window > 31536000/scale {
+		return fmt.Errorf("速率限制窗口不能超过一年")
+	}
+	if expiry > 0 && expiryUnit == "" {
+		return fmt.Errorf("请选择有效期单位")
+	}
+	switch expiryUnit {
+	case "", "minutes", "hours", "days":
+	default:
+		return fmt.Errorf("无效的有效期单位")
+	}
+	return nil
 }

@@ -32,7 +32,7 @@ docker run -d \
   rtyedfty/vte
 ```
 
-Then visit http://YOUR_IP:8050, default login: `admin` / `admin123`
+Then visit http://YOUR_IP:8050, username: `admin`; see `docker logs vte` for the random initial password when `ADMIN_PASSWORD` is unset
 
 **Custom port and password:**
 ```bash
@@ -151,7 +151,7 @@ cd backend
 |----------|-------------|---------|
 | `PORT` | Server port | `8050` |
 | `HOST` | Bind address | `0.0.0.0` |
-| `ADMIN_PASSWORD` | Admin password | `admin123` |
+| `ADMIN_PASSWORD` | Initial password for a new administrator only | Random at first startup |
 | `SECRET_KEY` | JWT secret | Auto-generated |
 | `DATABASE_PATH` | SQLite path | `./data/gateway.db` |
 
@@ -181,7 +181,7 @@ set ADMIN_PASSWORD=mypassword
 ### 1. Access Web Interface
 Visit http://127.0.0.1:8050 and login with default credentials:
 - Username: `admin`
-- Password: `admin123`
+- Password: random initial password in startup logs, or the `ADMIN_PASSWORD` supplied on first startup
 
 ### 2. Add a Provider
 - Click "Add Provider" button
@@ -259,7 +259,7 @@ Click "Fetch Models" to:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ADMIN_PASSWORD` | Admin account password | `admin123` |
+| `ADMIN_PASSWORD` | Initial password for a new administrator only | Random at first startup |
 | `SECRET_KEY` | JWT secret key for authentication | Auto-generated |
 | `DATABASE_PATH` | SQLite database file path | `./data/gateway.db` |
 
@@ -278,7 +278,7 @@ VTE works with any OpenAI-compatible API. Here are some examples:
 | Provider | Type | API URL | Notes |
 |----------|------|---------|-------|
 | OpenAI | Standard | `https://api.openai.com/v1` | Official OpenAI API |
-| Anthropic Claude | Standard | `https://api.anthropic.com/v1` | Claude API |
+| Anthropic Claude | Standard | OpenAI-compatible adapter endpoint | Native Messages API is not supported |
 | Google Gemini | Vertex Express | N/A | Requires project ID |
 | Ollama | Standard | `http://localhost:11434/v1` | Local models |
 | Azure OpenAI | Standard | `https://{resource}.openai.azure.com/v1` | Azure endpoint |
@@ -340,6 +340,11 @@ vte/
 ---
 
 ## 📝 Changelog
+
+### v1.0.10
+- Fix key rotation, quota transactions, cancellation, limits and stream conversion. See [CHANGELOG.md](CHANGELOG.md) for migration notes.
+- See [Nginx example](deploy/nginx.conf.example). Compose binds to loopback by default.
+- Configure `UPSTREAM_TIMEOUT_SECONDS` (default 300) and `INCLUDE_STREAM_USAGE` (default true) as needed.
 
 ### v1.0.5
 - ✅ **Multi API Key Support** - Add multiple API keys per provider with round-robin rotation

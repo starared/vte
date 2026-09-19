@@ -10,11 +10,13 @@ services:
       dockerfile: Dockerfile
     container_name: vte
     ports:
-      - "8050:8050"
+      - "127.0.0.1:8050:8050"
     volumes:
       - vte-data:/app/data
     environment:
-      - ADMIN_PASSWORD=admin123
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - UPSTREAM_TIMEOUT_SECONDS=${UPSTREAM_TIMEOUT_SECONDS:-300}
+      - INCLUDE_STREAM_USAGE=${INCLUDE_STREAM_USAGE:-true}
       # - SECRET_KEY=your-secret-key-here
     restart: unless-stopped
     healthcheck:

@@ -8,7 +8,7 @@
 - 自动记录每次API调用的token使用情况
 - 记录内容包括：模型名称、提供商、输入token、输出token、总token数
 - 支持流式和非流式响应的token统计
-- 使用 tiktoken 精确计算 token 数量（当上游 API 不返回 usage 时）
+- 上游 usage 优先；流式响应缺少 usage 时使用 tiktoken 估算，不等同于模型实际计费 Token（思考、工具调用、图片等可能有偏差）
 
 ### 2. 统计展示
 - **今日总览**：显示今天的总token、输入token、输出token消耗

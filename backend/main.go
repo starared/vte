@@ -14,9 +14,13 @@ import (
 
 func main() {
 	// 设置全局时区为北京时间
-	loc, err := time.LoadLocation("Asia/Shanghai")
+	zone := os.Getenv("TZ")
+	if zone == "" {
+		zone = "Asia/Shanghai"
+	}
+	loc, err := time.LoadLocation(zone)
 	if err != nil {
-		log.Printf("Warning: Failed to load Asia/Shanghai timezone, using UTC: %v", err)
+		log.Printf("Warning: Failed to load configured timezone, using UTC: %v", err)
 	} else {
 		time.Local = loc
 	}

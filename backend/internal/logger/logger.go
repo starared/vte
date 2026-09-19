@@ -15,10 +15,12 @@ var (
 )
 
 type Stats struct {
-	TotalRequests   int    `json:"total_requests"`
-	SuccessRequests int    `json:"success_requests"`
-	ErrorRequests   int    `json:"error_requests"`
-	LastReset       string `json:"last_reset"`
+	TotalRequests       int    `json:"total_requests"`
+	SuccessRequests     int    `json:"success_requests"`
+	ErrorRequests       int    `json:"error_requests"`
+	CancelledRequests   int    `json:"cancelled_requests"`
+	InterruptedRequests int    `json:"interrupted_requests"`
+	LastReset           string `json:"last_reset"`
 }
 
 func log(level, message string) {
@@ -90,3 +92,6 @@ func ResetStats() {
 	stats = Stats{LastReset: time.Now().Format(time.RFC3339)}
 	mu.Unlock()
 }
+
+func RequestCancelled()   { mu.Lock(); defer mu.Unlock(); stats.CancelledRequests++ }
+func RequestInterrupted() { mu.Lock(); defer mu.Unlock(); stats.InterruptedRequests++ }

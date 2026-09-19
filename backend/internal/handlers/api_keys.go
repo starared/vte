@@ -42,24 +42,17 @@ func GetNextAPIKey(providerID int) (string, int, error) {
 			ID     int
 			APIKey string
 		}
-		rows.Scan(&k.ID, &k.APIKey)
+		if err := rows.Scan(&k.ID, &k.APIKey); err != nil {
+			return "", 0, err
+		}
 		keys = append(keys, k)
 	}
 
+	if err := rows.Err(); err != nil {
+		return "", 0, err
+	}
 	if len(keys) == 0 {
 		return "", 0, fmt.Errorf("no active api keys")
-	}
-
-	if len(keys) == 1 {
-		// 只有一个密钥，直接返回并更新统计
-		go func() {
-			db.Exec(`
-				UPDATE provider_api_keys 
-				SET usage_count = usage_count + 1, last_used_at = CURRENT_TIMESTAMP 
-				WHERE id = ?
-			`, keys[0].ID)
-		}()
-		return keys[0].APIKey, keys[0].ID, nil
 	}
 
 	// 轮询选择
@@ -71,15 +64,6 @@ func GetNextAPIKey(providerID int) (string, int, error) {
 	selected := keys[idx]
 	keyIndexMap[providerID] = (idx + 1) % len(keys)
 	keyIndexMu.Unlock()
-
-	// 更新使用统计
-	go func() {
-		db.Exec(`
-			UPDATE provider_api_keys 
-			SET usage_count = usage_count + 1, last_used_at = CURRENT_TIMESTAMP 
-			WHERE id = ?
-		`, selected.ID)
-	}()
 
 	return selected.APIKey, selected.ID, nil
 }
@@ -215,6 +199,14 @@ func UpdateAPIKey(c *gin.Context) {
 	updates := []string{}
 	args := []interface{}{}
 
+	if req.APIKey != nil {
+		if *req.APIKey == "" {
+			c.JSON(400, gin.H{"detail": "密钥不能为空"})
+			return
+		}
+		updates = append(updates, "api_key = ?")
+		args = append(args, *req.APIKey)
+	}
 	if req.Name != nil {
 		updates = append(updates, "name = ?")
 		args = append(args, *req.Name)
@@ -236,8 +228,8 @@ func UpdateAPIKey(c *gin.Context) {
 			}
 			query += u
 		}
-		query += " WHERE id = ?"
-		args = append(args, keyID)
+		query += " WHERE id = ? AND provider_id = ?"
+		args = append(args, keyID, c.Param("id"))
 
 		_, err = db.Exec(query, args...)
 		if err != nil {
@@ -258,7 +250,7 @@ func DeleteAPIKey(c *gin.Context) {
 	}
 
 	db := database.DB()
-	_, err = db.Exec("DELETE FROM provider_api_keys WHERE id = ?", keyID)
+	_, err = db.Exec("DELETE FROM provider_api_keys WHERE id = ? AND provider_id = ?", keyID, c.Param("id"))
 	if err != nil {
 		c.JSON(500, gin.H{"detail": "删除失败"})
 		return

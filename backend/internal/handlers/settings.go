@@ -280,6 +280,10 @@ func SetRateLimitSettings(c *gin.Context) {
 		return
 	}
 
+	if req.Enabled && (req.MaxRequests <= 0 || req.Window <= 0 || req.Window > 31536000) {
+		c.JSON(400, gin.H{"detail": "启用限制时，请填写有效的正数参数"})
+		return
+	}
 	db := database.DB()
 
 	enabledStr := "false"
@@ -287,9 +291,18 @@ func SetRateLimitSettings(c *gin.Context) {
 		enabledStr = "true"
 	}
 
-	db.Exec(`INSERT INTO settings (key, value) VALUES ('rate_limit_enabled', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, enabledStr, enabledStr)
-	db.Exec(`INSERT INTO settings (key, value) VALUES ('rate_limit_max_requests', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, strconv.Itoa(req.MaxRequests), strconv.Itoa(req.MaxRequests))
-	db.Exec(`INSERT INTO settings (key, value) VALUES ('rate_limit_window', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, strconv.Itoa(req.Window), strconv.Itoa(req.Window))
+	if _, err := db.Exec(`INSERT INTO settings (key, value) VALUES ('rate_limit_enabled', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, enabledStr, enabledStr); err != nil {
+		c.JSON(500, gin.H{"detail": "保存失败"})
+		return
+	}
+	if _, err := db.Exec(`INSERT INTO settings (key, value) VALUES ('rate_limit_max_requests', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, strconv.Itoa(req.MaxRequests), strconv.Itoa(req.MaxRequests)); err != nil {
+		c.JSON(500, gin.H{"detail": "保存失败"})
+		return
+	}
+	if _, err := db.Exec(`INSERT INTO settings (key, value) VALUES ('rate_limit_window', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, strconv.Itoa(req.Window), strconv.Itoa(req.Window)); err != nil {
+		c.JSON(500, gin.H{"detail": "保存失败"})
+		return
+	}
 
 	logger.Info(fmt.Sprintf("%s | 更新速率限制 | 启用=%v 最大请求=%d 窗口=%ds", c.ClientIP(), req.Enabled, req.MaxRequests, req.Window))
 	c.JSON(200, gin.H{"message": "设置已更新"})
@@ -323,6 +336,10 @@ func SetConcurrencySettings(c *gin.Context) {
 		return
 	}
 
+	if req.Enabled && req.Limit <= 0 {
+		c.JSON(400, gin.H{"detail": "启用限制时，请填写有效的正数参数"})
+		return
+	}
 	db := database.DB()
 
 	enabledStr := "false"
@@ -330,8 +347,14 @@ func SetConcurrencySettings(c *gin.Context) {
 		enabledStr = "true"
 	}
 
-	db.Exec(`INSERT INTO settings (key, value) VALUES ('concurrency_enabled', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, enabledStr, enabledStr)
-	db.Exec(`INSERT INTO settings (key, value) VALUES ('concurrency_limit', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, strconv.Itoa(req.Limit), strconv.Itoa(req.Limit))
+	if _, err := db.Exec(`INSERT INTO settings (key, value) VALUES ('concurrency_enabled', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, enabledStr, enabledStr); err != nil {
+		c.JSON(500, gin.H{"detail": "保存失败"})
+		return
+	}
+	if _, err := db.Exec(`INSERT INTO settings (key, value) VALUES ('concurrency_limit', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, strconv.Itoa(req.Limit), strconv.Itoa(req.Limit)); err != nil {
+		c.JSON(500, gin.H{"detail": "保存失败"})
+		return
+	}
 
 	logger.Info(fmt.Sprintf("%s | 更新并发限制 | 启用=%v 限制=%d", c.ClientIP(), req.Enabled, req.Limit))
 	c.JSON(200, gin.H{"message": "设置已更新"})
@@ -382,10 +405,19 @@ func SetCustomRateLimitRules(c *gin.Context) {
 		return
 	}
 
+	for _, rule := range req.Rules {
+		if rule.Enabled && (rule.MaxRequests <= 0 || rule.Window <= 0 || rule.Window > 31536000) {
+			c.JSON(400, gin.H{"detail": "规则请求数及时间窗口必须为有效正数"})
+			return
+		}
+	}
 	rulesJSON, _ := json.Marshal(req.Rules)
 
 	db := database.DB()
-	db.Exec(`INSERT INTO settings (key, value) VALUES ('custom_rate_limit_rules', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, string(rulesJSON), string(rulesJSON))
+	if _, err := db.Exec(`INSERT INTO settings (key, value) VALUES ('custom_rate_limit_rules', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, string(rulesJSON), string(rulesJSON)); err != nil {
+		c.JSON(500, gin.H{"detail": "保存失败"})
+		return
+	}
 
 	logger.Info(fmt.Sprintf("%s | 更新自定义速率限制规则 | %d条规则", c.ClientIP(), len(req.Rules)))
 	c.JSON(200, gin.H{"message": "设置已更新"})

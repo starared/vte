@@ -3,6 +3,7 @@ package tokenizer
 import (
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/pkoukk/tiktoken-go"
 )
@@ -14,7 +15,7 @@ var (
 
 // 模型到编码器的映射
 var modelEncodingMap = map[string]string{
-	// Claude 模型使用 cl100k_base（与 GPT-4 相同）
+	// Non-OpenAI models use an approximate fallback, not their native tokenizer.
 	"claude":        "cl100k_base",
 	"claude-3":      "cl100k_base",
 	"claude-opus":   "cl100k_base",
@@ -166,7 +167,7 @@ func estimateTokens(text string) int {
 	}
 
 	// 中文按 1.5 字符/token，其他按 4 字符/token
-	otherCount := len(text) - chineseCount
+	otherCount := utf8.RuneCountInString(text) - chineseCount
 	tokens := int(float64(chineseCount)/1.5 + float64(otherCount)/4)
 	if tokens < 1 && len(text) > 0 {
 		tokens = 1
@@ -176,13 +177,14 @@ func estimateTokens(text string) int {
 
 // estimateMessagesTokens 估算消息的 token（备用方案）
 func estimateMessagesTokens(messages []interface{}) int {
-	totalChars := 0
+	total := 3
 	for _, msg := range messages {
 		if m, ok := msg.(map[string]interface{}); ok {
+			total += 3
 			if content, ok := m["content"].(string); ok {
-				totalChars += len(content)
+				total += estimateTokens(content)
 			}
 		}
 	}
-	return estimateTokens(string(make([]byte, totalChars)))
+	return total
 }

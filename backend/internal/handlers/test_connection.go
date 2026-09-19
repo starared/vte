@@ -22,7 +22,10 @@ func TestConnection(c *gin.Context) {
 	}
 
 	var req models.TestConnectionRequest
-	c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"detail": "无效的测试参数"})
+		return
+	}
 
 	db := database.DB()
 
@@ -52,8 +55,10 @@ func TestConnection(c *gin.Context) {
 	}
 
 	// 确定使用哪个 API Key
-	apiKey := provider.APIKey
-	apiKeyName := "默认密钥"
+	var apiKey string
+	var keyID int
+	var keyErr error
+	apiKeyName := "自动选择启用密钥"
 	if req.APIKeyID != nil && *req.APIKeyID > 0 {
 		var keyInfo struct {
 			APIKey string
@@ -61,10 +66,20 @@ func TestConnection(c *gin.Context) {
 		}
 		err = db.QueryRow("SELECT api_key, name FROM provider_api_keys WHERE id = ? AND provider_id = ?",
 			*req.APIKeyID, providerID).Scan(&keyInfo.APIKey, &keyInfo.Name)
-		if err == nil {
-			apiKey = keyInfo.APIKey
-			apiKeyName = keyInfo.Name
+		if err != nil {
+			c.JSON(400, gin.H{"detail": "指定密钥不存在"})
+			return
 		}
+		apiKey = keyInfo.APIKey
+		apiKeyName = keyInfo.Name
+		keyID = *req.APIKeyID
+		keyErr = nil
+	} else {
+		apiKey, keyID, keyErr = GetNextAPIKey(providerID)
+	}
+	if keyErr != nil {
+		c.JSON(400, gin.H{"detail": "没有启用的密钥可供测试"})
+		return
 	}
 
 	// 确定使用哪个模型
@@ -88,6 +103,7 @@ func TestConnection(c *gin.Context) {
 
 	// 构建配置
 	cfg := &proxy.ProviderConfig{
+		BeforeAttempt:  func() { recordKeyAttempt(keyID) },
 		BaseURL:        provider.BaseURL,
 		APIKey:         apiKey,
 		ProviderType:   provider.ProviderType,
@@ -114,11 +130,11 @@ func TestConnection(c *gin.Context) {
 		"messages": []map[string]string{
 			{"role": "user", "content": "Hi"},
 		},
-		"max_tokens": 5,
+		"stream": false,
 	}
 
 	startTime := time.Now()
-	result, err := cfg.ChatCompletionWithRetry(payload, 1) // 只重试1次
+	result, err := cfg.ChatCompletionWithRetry(c.Request.Context(), payload, 1) // 只重试1次
 	duration := time.Since(startTime).Milliseconds()
 
 	if err != nil {
@@ -177,7 +193,7 @@ func GetTestOptions(c *gin.Context) {
 	}
 	defer modelRows.Close()
 
-	var models []gin.H
+	models := make([]gin.H, 0)
 	for modelRows.Next() {
 		var id int
 		var originalID, displayName string
@@ -202,7 +218,7 @@ func GetTestOptions(c *gin.Context) {
 
 	var keys []gin.H
 	// 添加默认密钥选项
-	keys = append(keys, gin.H{"id": 0, "name": "默认密钥"})
+	keys = append(keys, gin.H{"id": 0, "name": "自动选择启用密钥"})
 	for keyRows.Next() {
 		var id int
 		var name string

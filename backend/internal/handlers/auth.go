@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"vte/internal/auth"
@@ -11,6 +13,11 @@ import (
 )
 
 func Login(c *gin.Context) {
+	if !allowLogin(c.ClientIP()) {
+		c.Header("Retry-After", "60")
+		c.JSON(429, gin.H{"detail": "登录尝试过多，请一分钟后重试"})
+		return
+	}
 	var req models.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"detail": "无效的请求"})
@@ -127,4 +134,33 @@ func RegenerateAPIKey(c *gin.Context) {
 
 	logger.Info(fmt.Sprintf("%s | 重新生成API Key | %s", c.ClientIP(), user.Username))
 	c.JSON(200, gin.H{"api_key": newKey})
+}
+
+var loginAttempts = struct {
+	sync.Mutex
+	times map[string][]time.Time
+}{times: map[string][]time.Time{}}
+
+func allowLogin(ip string) bool {
+	loginAttempts.Lock()
+	defer loginAttempts.Unlock()
+	now := time.Now()
+	cutoff := now.Add(-time.Minute)
+	for key, times := range loginAttempts.times {
+		if len(times) == 0 || times[len(times)-1].Before(cutoff) {
+			delete(loginAttempts.times, key)
+		}
+	}
+	kept := loginAttempts.times[ip][:0]
+	for _, at := range loginAttempts.times[ip] {
+		if at.After(cutoff) {
+			kept = append(kept, at)
+		}
+	}
+	loginAttempts.times[ip] = kept
+	if len(kept) >= 10 {
+		return false
+	}
+	loginAttempts.times[ip] = append(kept, now)
+	return true
 }

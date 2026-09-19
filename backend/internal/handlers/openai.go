@@ -1,17 +1,20 @@
 package handlers
 
 import (
-	"bufio"
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"vte/internal/auth"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -153,60 +156,32 @@ func checkCustomRateLimit(providerID int, providerName string, modelName string)
 	defer customRateLimitMu.Unlock()
 
 	now := time.Now()
-
-	for _, rule := range rules {
+	pending := make(map[string][]time.Time)
+	for i, rule := range rules {
 		if !rule.Enabled {
 			continue
 		}
-
-		// 检查规则是否匹配
-		matched := false
-		var key string
-
-		if rule.ProviderID > 0 && rule.ModelName != "" {
-			// 特定提供商的特定模型
-			if rule.ProviderID == providerID && rule.ModelName == modelName {
-				matched = true
-				key = fmt.Sprintf("provider:%d:model:%s", providerID, modelName)
-			}
-		} else if rule.ProviderID > 0 {
-			// 特定提供商的所有模型
-			if rule.ProviderID == providerID {
-				matched = true
-				key = fmt.Sprintf("provider:%d", providerID)
-			}
-		} else if rule.ModelName != "" {
-			// 所有提供商的特定模型
-			if rule.ModelName == modelName {
-				matched = true
-				key = fmt.Sprintf("model:%s", modelName)
-			}
-		}
-
-		if !matched {
+		if rule.ProviderID > 0 && rule.ProviderID != providerID {
 			continue
 		}
-
-		// 检查此规则的速率限制
-		windowStart := now.Add(-time.Duration(rule.Window) * time.Second)
-
-		// 清理过期记录
-		times := customRequestTimes[key]
-		validTimes := make([]time.Time, 0, len(times))
-		for _, t := range times {
-			if t.After(windowStart) {
-				validTimes = append(validTimes, t)
+		if rule.ModelName != "" && rule.ModelName != modelName {
+			continue
+		}
+		key := fmt.Sprintf("rule:%d:%d:%d", rule.ID, i, rule.Window)
+		cutoff := now.Add(-time.Duration(rule.Window) * time.Second)
+		kept := make([]time.Time, 0, len(customRequestTimes[key]))
+		for _, at := range customRequestTimes[key] {
+			if at.After(cutoff) {
+				kept = append(kept, at)
 			}
 		}
-		customRequestTimes[key] = validTimes
-
-		// 检查是否超限
-		if len(validTimes) >= rule.MaxRequests {
+		if rule.MaxRequests <= 0 || rule.Window <= 0 || len(kept) >= rule.MaxRequests {
 			return false, rule.Name
 		}
-
-		// 记录本次请求
-		customRequestTimes[key] = append(validTimes, now)
+		pending[key] = append(kept, now)
+	}
+	for key, times := range pending {
+		customRequestTimes[key] = times
 	}
 
 	return true, ""
@@ -239,13 +214,16 @@ func acquireConcurrency() bool {
 		return true
 	}
 
-	current := atomic.LoadInt64(&currentConcurrency)
-	if current >= int64(limit) {
-		return false
+	for {
+		current := atomic.LoadInt64(&currentConcurrency)
+		if current >= int64(limit) {
+			return false
+		}
+		if atomic.CompareAndSwapInt64(&currentConcurrency, current, current+1) {
+			return true
+		}
 	}
 
-	atomic.AddInt64(&currentConcurrency, 1)
-	return true
 }
 
 // releaseConcurrency 释放并发槽
@@ -267,7 +245,7 @@ func getMaxRetries() int {
 		return 3 // 默认3次
 	}
 	retries, err := strconv.Atoi(maxRetries)
-	if err != nil {
+	if err != nil || retries < 0 || retries > 10 {
 		return 3
 	}
 	return retries
@@ -475,12 +453,12 @@ func OpenAIListModels(c *gin.Context) {
 		WHERE m.is_active = 1 AND p.is_active = 1
 	`)
 	if err != nil {
-		c.JSON(500, gin.H{"detail": "查询失败"})
+		apiError(c, 500, "request_error", "查询失败")
 		return
 	}
 	defer rows.Close()
 
-	var data []gin.H
+	data := make([]gin.H, 0)
 	currentTime := time.Now().Unix()
 	for rows.Next() {
 		var displayName, originalID, providerName *string
@@ -533,13 +511,18 @@ func OpenAIChatCompletions(c *gin.Context) {
 	// 先解析请求获取模型名和stream参数，用于后续的自定义错误响应
 	var payload map[string]interface{}
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(400, gin.H{"detail": "无效的 JSON"})
+		apiError(c, 400, "request_error", "无效的 JSON")
+		return
+	}
+
+	if err := validateChatPayload(payload); err != nil {
+		apiError(c, 400, "invalid_request_error", err.Error())
 		return
 	}
 
 	modelName, ok := payload["model"].(string)
 	if !ok || modelName == "" {
-		c.JSON(400, gin.H{"detail": "缺少 model 参数"})
+		apiError(c, 400, "request_error", "缺少 model 参数")
 		return
 	}
 
@@ -551,11 +534,11 @@ func OpenAIChatCompletions(c *gin.Context) {
 	// 临时密钥校验（过期、可用模型）
 	if tempKey != nil {
 		if tempKey.ExpiresAt != nil && time.Now().After(*tempKey.ExpiresAt) {
-			c.JSON(401, gin.H{"detail": "API Key 已过期"})
+			apiError(c, 401, "request_error", "API Key 已过期")
 			return
 		}
 		if len(allowedModels) > 0 && !allowedModels[modelName] {
-			c.JSON(403, gin.H{"detail": "当前密钥无权使用该模型"})
+			apiError(c, 403, "request_error", "当前密钥无权使用该模型")
 			return
 		}
 	}
@@ -616,15 +599,17 @@ func OpenAIChatCompletions(c *gin.Context) {
 	db.QueryRow("SELECT value FROM settings WHERE key = 'stream_mode'").Scan(&streamMode)
 
 	if streamMode == "force_stream" {
-		stream = true
 		payload["stream"] = true
 	} else if streamMode == "force_non_stream" {
-		stream = false
 		payload["stream"] = false
 	}
 
 	// 如果是流式请求，添加 stream_options 以获取 usage 信息
-	if stream {
+	upstreamStream, _ := payload["stream"].(bool)
+	if !upstreamStream {
+		delete(payload, "stream_options")
+	}
+	if upstreamStream && os.Getenv("INCLUDE_STREAM_USAGE") != "false" {
 		if _, exists := payload["stream_options"]; !exists {
 			payload["stream_options"] = map[string]interface{}{
 				"include_usage": true,
@@ -638,7 +623,7 @@ func OpenAIChatCompletions(c *gin.Context) {
 	// 查找模型
 	model, provider, err := findModel(modelName)
 	if err != nil {
-		errMsg := fmt.Sprintf("模型不存在: %s", modelName)
+		errMsg := fmt.Sprintf("模型不可用: %s (%v)", modelName, err)
 		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
 			logger.Error(fmt.Sprintf("%s | %s | 自定义响应(原错误: 模型不存在)", c.ClientIP(), modelName))
 			if stream {
@@ -651,7 +636,7 @@ func OpenAIChatCompletions(c *gin.Context) {
 			}
 			return
 		}
-		c.JSON(404, gin.H{"detail": errMsg})
+		apiError(c, 404, "request_error", errMsg)
 		return
 	}
 
@@ -669,31 +654,8 @@ func OpenAIChatCompletions(c *gin.Context) {
 			}
 			return
 		}
-		c.JSON(503, gin.H{"detail": errMsg})
+		apiError(c, 503, "request_error", errMsg)
 		return
-	}
-
-	// 临时密钥用量消耗
-	if tempKey != nil {
-		switch err := database.ConsumeTempAPIUsage(tempKey.ID, modelName); err {
-		case nil:
-			// ok
-		case database.ErrTempAPILimitExceeded:
-			c.JSON(429, gin.H{"detail": "API Key 请求次数已用尽"})
-			return
-		case database.ErrTempAPIModelExceeded:
-			c.JSON(429, gin.H{"detail": "该模型的可用次数已用尽"})
-			return
-		case database.ErrTempAPIExpired:
-			c.JSON(401, gin.H{"detail": "API Key 已过期"})
-			return
-		case database.ErrTempAPIDisabled:
-			c.JSON(401, gin.H{"detail": "API Key 已禁用"})
-			return
-		default:
-			c.JSON(500, gin.H{"detail": "更新用量失败"})
-			return
-		}
 	}
 
 	// 检查自定义速率限制
@@ -725,6 +687,14 @@ func OpenAIChatCompletions(c *gin.Context) {
 		return
 	}
 
+	if tempKey != nil {
+		release, err := acquireTempLimits(tempKey)
+		if err != nil {
+			apiError(c, 429, "rate_limit_exceeded", err.Error())
+			return
+		}
+		defer release()
+	}
 	// 替换模型名为原始 ID
 	originalID := model.OriginalID
 	if provider.ProviderType == "vertex_express" && len(originalID) > 0 {
@@ -734,8 +704,40 @@ func OpenAIChatCompletions(c *gin.Context) {
 	}
 	payload["model"] = originalID
 
+	apiKey, keyID, err := GetNextAPIKey(provider.ID)
+	if err != nil {
+		apiError(c, 503, "no_available_key", "提供商没有启用的密钥")
+		return
+	}
+	provider.APIKey = apiKey
+	c.Set("resolved_model", model)
+	c.Set("resolved_provider", provider)
+	// 临时密钥用量消耗
+	if tempKey != nil {
+		switch err := database.ConsumeTempAPIUsage(tempKey.ID, modelName); err {
+		case nil:
+			// ok
+		case database.ErrTempAPILimitExceeded:
+			apiError(c, 429, "request_error", "API Key 请求次数已用尽")
+			return
+		case database.ErrTempAPIModelExceeded:
+			apiError(c, 429, "request_error", "该模型的可用次数已用尽")
+			return
+		case database.ErrTempAPIExpired:
+			apiError(c, 401, "request_error", "API Key 已过期")
+			return
+		case database.ErrTempAPIDisabled:
+			apiError(c, 401, "request_error", "API Key 已禁用")
+			return
+		default:
+			apiError(c, 500, "request_error", "更新用量失败")
+			return
+		}
+	}
+
 	// 构建客户端配置
 	cfg := &proxy.ProviderConfig{
+		BeforeAttempt:  func() { recordKeyAttempt(keyID) },
 		BaseURL:        provider.BaseURL,
 		APIKey:         provider.APIKey,
 		ProviderType:   provider.ProviderType,
@@ -760,7 +762,7 @@ func OpenAIChatCompletions(c *gin.Context) {
 
 func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map[string]interface{}, modelName string, startTime time.Time) {
 	maxRetries := getMaxRetries()
-	result, err := cfg.ChatCompletionWithRetry(payload, maxRetries)
+	result, err := cfg.CompletionForClient(c.Request.Context(), payload, maxRetries)
 	duration := time.Since(startTime).Seconds()
 
 	if err != nil {
@@ -770,17 +772,22 @@ func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload 
 		db := database.DB()
 		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
 			logger.Info(fmt.Sprintf("%s | %s | %.2fs | 自定义响应(原错误: %s)", c.ClientIP(), modelName, duration, errMsg))
-			logger.RequestSuccess()
+			logger.RequestError()
 			c.JSON(200, buildFakeResponse(customResponse, modelName))
 			return
 		}
 
 		logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), modelName, duration, err))
-		logger.RequestError()
-		c.JSON(500, gin.H{"detail": fmt.Sprintf("请求失败: %v", err)})
+		if errors.Is(err, context.Canceled) {
+			logger.RequestCancelled()
+		} else {
+			logger.RequestError()
+		}
+		writeUpstreamError(c, err)
 		return
 	}
 
+	result["model"] = modelName
 	// 记录token使用情况
 	if usage, ok := result["usage"].(map[string]interface{}); ok {
 		promptTokens := 0
@@ -799,12 +806,14 @@ func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload 
 
 		// 如果 token 都为 0，说明是被上游拦截的空响应，跳过日志记录
 		if totalTokens == 0 && promptTokens == 0 && completionTokens == 0 {
+			logger.RequestSuccess()
 			c.JSON(200, result)
 			return
 		}
 
 		// 获取provider名称
-		model, provider, _ := findModel(modelName)
+		model := c.MustGet("resolved_model").(*modelInfo)
+		provider := c.MustGet("resolved_provider").(*providerInfo)
 		providerName := "unknown"
 		if provider != nil {
 			providerName = provider.Name
@@ -827,205 +836,107 @@ func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload 
 }
 
 func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map[string]interface{}, modelName string, startTime time.Time) {
-	maxRetries := getMaxRetries()
-	resp, err := cfg.ChatCompletionStreamWithRetry(payload, maxRetries)
+	resp, err := cfg.StreamForClient(c.Request.Context(), payload, getMaxRetries())
 	if err != nil {
-		duration := time.Since(startTime).Seconds()
-		errMsg := err.Error()
-
-		// 检查是否有自定义错误响应
-		db := database.DB()
-		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
-			logger.Info(fmt.Sprintf("%s | %s | %.2fs | 自定义响应(原错误: %s)", c.ClientIP(), modelName, duration, errMsg))
-			logger.RequestSuccess()
-
-			// 返回伪造的流式响应
+		logger.RequestError()
+		if matched, response := checkCustomErrorResponse(database.DB(), err.Error()); matched {
 			c.Header("Content-Type", "text/event-stream")
-			c.Header("Cache-Control", "no-cache")
-			c.Header("Connection", "keep-alive")
-			c.String(200, buildFakeStreamResponse(customResponse, modelName))
+			c.String(200, buildFakeStreamResponse(response, modelName))
 			return
 		}
-
-		logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), modelName, duration, err))
-		logger.RequestError()
-		c.JSON(500, gin.H{"detail": fmt.Sprintf("请求失败: %v", err)})
+		writeUpstreamError(c, err)
 		return
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		bodyStr := string(body)
-		duration := time.Since(startTime).Seconds()
-
-		// 检查是否有自定义错误响应
-		db := database.DB()
-		if matched, customResponse := checkCustomErrorResponse(db, bodyStr); matched {
-			logger.Info(fmt.Sprintf("%s | %s | %.2fs | 自定义响应(原错误: status %d)", c.ClientIP(), modelName, duration, resp.StatusCode))
-			logger.RequestSuccess()
-
-			// 返回伪造的流式响应
-			c.Header("Content-Type", "text/event-stream")
-			c.Header("Cache-Control", "no-cache")
-			c.Header("Connection", "keep-alive")
-			c.String(200, buildFakeStreamResponse(customResponse, modelName))
-			return
-		}
-
-		logger.Error(fmt.Sprintf("%s | %s | %.2fs | status %d: %s", c.ClientIP(), modelName, duration, resp.StatusCode, bodyStr))
-		logger.RequestError()
-		c.JSON(resp.StatusCode, gin.H{"detail": bodyStr})
-		return
-	}
-
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
-
-	// 用于累积 token 统计
-	var totalPromptTokens, totalCompletionTokens, totalTotalTokens int
-	// 用于收集输出内容（当 API 不返回 usage 时使用 tiktoken 计算）
-	var outputContent strings.Builder
-
-	// 使用 tiktoken 精确计算输入 token 数
-	var inputTokens int
-	if messages, ok := payload["messages"].([]interface{}); ok {
-		inputTokens = tokenizer.CountMessagesTokens(messages, modelName)
+	var output strings.Builder
+	var usage map[string]interface{}
+	done := false
+	send := func(data string) error {
+		_, err := fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+		c.Writer.Flush()
+		return err
 	}
-
-	// 用于跟踪请求是否已完成统计
-	requestCompleted := false
-
-	// 用于处理跨 buffer 的 SSE 数据
-	var sseBuffer strings.Builder
-
-	c.Stream(func(w io.Writer) bool {
-		buf := make([]byte, 4096)
-		n, err := resp.Body.Read(buf)
-		if n > 0 {
-			data := string(buf[:n])
-
-			// 将数据追加到缓冲区
-			sseBuffer.WriteString(data)
-			bufferContent := sseBuffer.String()
-
-			// 按完整的行处理
-			lastNewline := strings.LastIndex(bufferContent, "\n")
-			if lastNewline == -1 {
-				// 没有完整的行，继续等待
-				w.Write(buf[:n])
-				return true
-			}
-
-			// 处理完整的行
-			completeData := bufferContent[:lastNewline+1]
-			// 保留不完整的部分
-			sseBuffer.Reset()
-			sseBuffer.WriteString(bufferContent[lastNewline+1:])
-
-			// 尝试解析SSE数据中的usage信息
-			if strings.Contains(completeData, "\"usage\"") {
-				lines := strings.Split(completeData, "\n")
-				for _, line := range lines {
-					line = strings.TrimSpace(line)
-					if strings.HasPrefix(line, "data: ") && !strings.Contains(line, "[DONE]") {
-						jsonData := strings.TrimPrefix(line, "data: ")
-						var chunk map[string]interface{}
-						if json.Unmarshal([]byte(jsonData), &chunk) == nil {
-							if usage, ok := chunk["usage"].(map[string]interface{}); ok {
-								if pt, ok := usage["prompt_tokens"].(float64); ok {
-									totalPromptTokens = int(pt)
-								}
-								if ct, ok := usage["completion_tokens"].(float64); ok {
-									totalCompletionTokens = int(ct)
-								}
-								if tt, ok := usage["total_tokens"].(float64); ok {
-									totalTotalTokens = int(tt)
-								}
-							}
-						}
-					}
-				}
-			}
-
-			// 收集输出内容（用于 tiktoken 计算 token）
-			lines := strings.Split(completeData, "\n")
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "data: ") && !strings.Contains(line, "[DONE]") {
-					jsonData := strings.TrimPrefix(line, "data: ")
-					var chunk map[string]interface{}
-					if json.Unmarshal([]byte(jsonData), &chunk) == nil {
-						if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
-							if choice, ok := choices[0].(map[string]interface{}); ok {
-								if delta, ok := choice["delta"].(map[string]interface{}); ok {
-									if content, ok := delta["content"].(string); ok {
-										outputContent.WriteString(content)
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-
-			w.Write(buf[:n])
-			return true
+	err = proxy.ReadEvents(resp.Body, func(data string) error {
+		if err := c.Request.Context().Err(); err != nil {
+			return err
 		}
+		if data == "[DONE]" {
+			if err := send(data); err != nil {
+				return err
+			}
+			done = true
+			return io.EOF
+		}
+		var chunk map[string]interface{}
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			return fmt.Errorf("上游流式 JSON 格式错误")
+		}
+		if chunk == nil {
+			return fmt.Errorf("上游流式响应必须为 JSON 对象")
+		}
+		if _, ok := chunk["error"]; ok {
+			return fmt.Errorf("上游在流式响应中返回错误")
+		}
+		chunk["model"] = modelName
+		if u, ok := chunk["usage"].(map[string]interface{}); ok {
+			usage = u
+		}
+		if choices, ok := chunk["choices"].([]interface{}); ok {
+			for _, item := range choices {
+				if ch, ok := item.(map[string]interface{}); ok {
+					if d, ok := ch["delta"].(map[string]interface{}); ok {
+						if text, ok := d["content"].(string); ok {
+							output.WriteString(text)
+						}
+					}
+				}
+			}
+		}
+		encoded, err := json.Marshal(chunk)
 		if err != nil {
-			duration := time.Since(startTime).Seconds()
-			if err == io.EOF {
-				// 获取模型和提供商信息
-				model, provider, _ := findModel(modelName)
-				providerName := "unknown"
-				if provider != nil {
-					providerName = provider.Name
-				}
-				displayName := modelName
-				if model != nil && model.DisplayName != "" {
-					displayName = model.DisplayName
-				}
-
-				// 记录token使用情况并打印日志（合并为一行）
-				if totalTotalTokens > 0 {
-					// API返回了准确的usage信息
-					RecordTokenUsage(displayName, providerName, totalPromptTokens, totalCompletionTokens, totalTotalTokens)
-					logger.Info(fmt.Sprintf("%s | %s | %.2fs | Token: %d (in=%d, out=%d)", c.ClientIP(), modelName, duration, totalTotalTokens, totalPromptTokens, totalCompletionTokens))
-				} else {
-					// API没有返回usage，使用 tiktoken 精确计算
-					outputText := outputContent.String()
-					outputTokens := tokenizer.CountTokens(outputText, modelName)
-
-					if inputTokens > 0 || outputTokens > 0 {
-						totalTokens := inputTokens + outputTokens
-						RecordTokenUsage(displayName, providerName, inputTokens, outputTokens, totalTokens)
-						logger.Info(fmt.Sprintf("%s | %s | %.2fs | Token: %d (in=%d, out=%d)", c.ClientIP(), modelName, duration, totalTokens, inputTokens, outputTokens))
-					} else {
-						logger.Info(fmt.Sprintf("%s | %s | %.2fs", c.ClientIP(), modelName, duration))
-					}
-				}
-
-				logger.RequestSuccess()
-				requestCompleted = true
-			} else {
-				logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), modelName, duration, err))
-				logger.RequestError()
-				requestCompleted = true
-			}
-			return false
+			return err
 		}
-		return true
+		return send(string(encoded))
 	})
-
-	// 如果流被中断但没有正常完成统计，记录为成功（数据可能已部分发送）
-	if !requestCompleted {
-		duration := time.Since(startTime).Seconds()
-		logger.Info(fmt.Sprintf("%s | %s | %.2fs | 流被中断", c.ClientIP(), modelName, duration))
-		logger.RequestSuccess()
+	// Some upstreams keep the connection open after DONE; the callback terminates below.
+	if (err != nil && err != io.EOF) || !done {
+		if errors.Is(err, context.Canceled) || c.Request.Context().Err() != nil {
+			logger.RequestCancelled()
+		} else {
+			logger.RequestInterrupted()
+			if !c.Writer.Written() {
+				apiError(c, 502, "upstream_stream_error", "上游流式响应中断")
+			} else {
+				send(`{"error":{"message":"上游流式响应中断","type":"upstream_stream_error"}}`)
+			}
+		}
+		logger.Warn(fmt.Sprintf("%s | %s | 流未完成", c.ClientIP(), modelName))
+		return
 	}
+	model := c.MustGet("resolved_model").(*modelInfo)
+	provider := c.MustGet("resolved_provider").(*providerInfo)
+	pt, ct, tt := 0, 0, 0
+	estimated := usage == nil
+	if usage != nil {
+		pt = intNumber(usage["prompt_tokens"])
+		ct = intNumber(usage["completion_tokens"])
+		tt = intNumber(usage["total_tokens"])
+	} else {
+		messages, _ := payload["messages"].([]interface{})
+		pt = tokenizer.CountMessagesTokens(messages, model.OriginalID)
+		ct = tokenizer.CountTokens(output.String(), model.OriginalID)
+		tt = pt + ct
+	}
+	if tt > 0 {
+		RecordTokenUsage(modelName, provider.Name, pt, ct, tt)
+	}
+	logger.Info(fmt.Sprintf("%s | %s | %.2fs | Token: %d (estimated=%v)", c.ClientIP(), modelName, time.Since(startTime).Seconds(), tt, estimated))
+	logger.RequestSuccess()
 }
+func intNumber(v interface{}) int { n, _ := v.(float64); return int(n) }
 
 type modelWithProvider struct {
 	Model    *modelInfo
@@ -1053,75 +964,23 @@ type providerInfo struct {
 
 func findModel(modelName string) (*modelInfo, *providerInfo, error) {
 	db := database.DB()
-
-	// 先查 display_name
-	row := db.QueryRow(`
-		SELECT m.id, m.original_id, m.display_name,
-		       p.id, p.name, p.base_url, p.api_key, p.provider_type, 
-		       COALESCE(p.vertex_project, ''), COALESCE(p.vertex_location, 'global'),
-		       COALESCE(p.extra_headers, ''), COALESCE(p.proxy_url, ''), p.is_active
-		FROM models m
-		JOIN providers p ON m.provider_id = p.id
-		WHERE m.display_name = ? AND m.is_active = 1 AND p.is_active = 1
-	`, modelName)
-
-	model, provider, err := scanModelProvider(row)
-	if err == nil {
-		// 获取轮询密钥
-		if rotatedKey, _, err := GetNextAPIKey(provider.ID); err == nil && rotatedKey != "" {
-			provider.APIKey = rotatedKey
+	for _, field := range []string{"display_name", "original_id"} {
+		var count int
+		where := "m." + field + " = ? AND m.is_active = 1 AND p.is_active = 1"
+		if err := db.QueryRow("SELECT COUNT(*) FROM models m JOIN providers p ON m.provider_id = p.id WHERE "+where, modelName).Scan(&count); err != nil {
+			return nil, nil, err
 		}
-		return model, provider, nil
-	}
-
-	// 再查 original_id
-	row = db.QueryRow(`
-		SELECT m.id, m.original_id, m.display_name,
-		       p.id, p.name, p.base_url, p.api_key, p.provider_type, 
-		       COALESCE(p.vertex_project, ''), COALESCE(p.vertex_location, 'global'),
-		       COALESCE(p.extra_headers, ''), COALESCE(p.proxy_url, ''), p.is_active
-		FROM models m
-		JOIN providers p ON m.provider_id = p.id
-		WHERE m.original_id = ? AND m.is_active = 1 AND p.is_active = 1
-	`, modelName)
-
-	model, provider, err = scanModelProvider(row)
-	if err == nil {
-		// 获取轮询密钥
-		if rotatedKey, _, err := GetNextAPIKey(provider.ID); err == nil && rotatedKey != "" {
-			provider.APIKey = rotatedKey
+		if count > 1 {
+			return nil, nil, fmt.Errorf("ambiguous model: use a unique provider prefix or alias")
 		}
-		return model, provider, nil
-	}
-
-	// 尝试去掉前缀
-	if idx := len(modelName); idx > 0 {
-		for i, ch := range modelName {
-			if ch == '/' {
-				nameWithoutPrefix := modelName[i+1:]
-				row = db.QueryRow(`
-					SELECT m.id, m.original_id, m.display_name,
-					       p.id, p.name, p.base_url, p.api_key, p.provider_type, 
-					       COALESCE(p.vertex_project, ''), COALESCE(p.vertex_location, 'global'),
-					       COALESCE(p.extra_headers, ''), COALESCE(p.proxy_url, ''), p.is_active
-					FROM models m
-					JOIN providers p ON m.provider_id = p.id
-					WHERE m.original_id = ? AND m.is_active = 1 AND p.is_active = 1
-				`, nameWithoutPrefix)
-
-				model, provider, err = scanModelProvider(row)
-				if err == nil {
-					// 获取轮询密钥
-					if rotatedKey, _, err := GetNextAPIKey(provider.ID); err == nil && rotatedKey != "" {
-						provider.APIKey = rotatedKey
-					}
-					return model, provider, nil
-				}
-				break
-			}
+		if count == 0 {
+			continue
 		}
+		return scanModelProvider(db.QueryRow(`SELECT m.id, m.original_id, m.display_name,
+ p.id,p.name,p.base_url,p.api_key,p.provider_type,COALESCE(p.vertex_project,''),
+ COALESCE(p.vertex_location,'global'),COALESCE(p.extra_headers,''),COALESCE(p.proxy_url,''),p.is_active
+ FROM models m JOIN providers p ON m.provider_id=p.id WHERE `+where, modelName))
 	}
-
 	return nil, nil, fmt.Errorf("model not found")
 }
 
@@ -1151,231 +1010,61 @@ func scanModelProvider(row *sql.Row) (*modelInfo, *providerInfo, error) {
 
 // OpenAIChatCompletionsWS 处理 WebSocket 连接的聊天完成请求
 func OpenAIChatCompletionsWS(c *gin.Context) {
-	// 从查询参数或 header 获取 API Key
-	apiKey := c.Query("api_key")
-	if apiKey == "" {
-		apiKey = c.GetHeader("Authorization")
-		if strings.HasPrefix(apiKey, "Bearer ") {
-			apiKey = strings.TrimPrefix(apiKey, "Bearer ")
-		}
+	if c.GetHeader("Authorization") == "" && c.Query("api_key") != "" {
+		c.Request.Header.Set("Authorization", "Bearer "+c.Query("api_key"))
 	}
-
-	if apiKey == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"detail": "缺少 API Key"})
+	auth.APIKeyAuth()(c)
+	if c.IsAborted() {
 		return
 	}
-
-	// 验证 API Key
-	db := database.DB()
-	var userID int
-	err := db.QueryRow("SELECT id FROM users WHERE api_key = ? AND is_active = 1", apiKey).Scan(&userID)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"detail": "无效的 API Key"})
-		return
-	}
-
-	// 升级为 WebSocket 连接
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		logger.Error(fmt.Sprintf("WebSocket 升级失败: %v", err))
 		return
 	}
 	defer conn.Close()
-
-	for {
-		// 读取消息
-		_, message, err := conn.ReadMessage()
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				logger.Error(fmt.Sprintf("WebSocket 读取错误: %v", err))
-			}
-			break
-		}
-
-		// 解析请求
-		var payload map[string]interface{}
-		if err := json.Unmarshal(message, &payload); err != nil {
-			conn.WriteJSON(gin.H{"error": "无效的 JSON"})
-			continue
-		}
-
-		modelName, ok := payload["model"].(string)
-		if !ok || modelName == "" {
-			conn.WriteJSON(gin.H{"error": "缺少 model 参数"})
-			continue
-		}
-
-		// 强制使用流式
-		payload["stream"] = true
-
-		// 查找模型
-		model, provider, err := findModel(modelName)
-		if err != nil {
-			conn.WriteJSON(gin.H{"error": fmt.Sprintf("模型不存在: %s", modelName)})
-			continue
-		}
-
-		if !provider.IsActive {
-			conn.WriteJSON(gin.H{"error": fmt.Sprintf("提供商已禁用: %s", provider.Name)})
-			continue
-		}
-
-		// 替换模型名为原始 ID
-		originalID := model.OriginalID
-		if provider.ProviderType == "vertex_express" && len(originalID) > 0 {
-			if len(originalID) < 7 || originalID[:7] != "google/" {
-				originalID = "google/" + originalID
-			}
-		}
-		payload["model"] = originalID
-
-		// 构建客户端配置
-		cfg := &proxy.ProviderConfig{
-			BaseURL:        provider.BaseURL,
-			APIKey:         provider.APIKey,
-			ProviderType:   provider.ProviderType,
-			VertexProject:  provider.VertexProject,
-			VertexLocation: provider.VertexLocation,
-			ProxyURL:       provider.ProxyURL,
-		}
-
-		if provider.ExtraHeaders != "" {
-			json.Unmarshal([]byte(provider.ExtraHeaders), &cfg.ExtraHeaders)
-		}
-
-		startTime := time.Now()
-		logger.RequestStart()
-
-		// 发起流式请求
-		resp, err := cfg.ChatCompletionStream(payload)
-		if err != nil {
-			duration := time.Since(startTime).Seconds()
-			logger.Error(fmt.Sprintf("WebSocket | %s | %.2fs | %v", modelName, duration, err))
-			logger.RequestError()
-			conn.WriteJSON(gin.H{"error": fmt.Sprintf("请求失败: %v", err)})
-			continue
-		}
-
-		if resp.StatusCode != 200 {
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			duration := time.Since(startTime).Seconds()
-			logger.Error(fmt.Sprintf("WebSocket | %s | %.2fs | status %d", modelName, duration, resp.StatusCode))
-			logger.RequestError()
-			conn.WriteJSON(gin.H{"error": string(body)})
-			continue
-		}
-
-		// 流式转发响应
-		reader := bufio.NewReader(resp.Body)
-
-		// Token 统计变量
-		var totalPromptTokens, totalCompletionTokens, totalTotalTokens int
-		var estimatedOutputContent strings.Builder
-
-		// 估算输入 token
-		estimatedInputChars := 0
-		if messages, ok := payload["messages"].([]interface{}); ok {
-			for _, msg := range messages {
-				if m, ok := msg.(map[string]interface{}); ok {
-					if content, ok := m["content"].(string); ok {
-						estimatedInputChars += len(content)
-					}
-				}
-			}
-		}
-
+	conn.SetReadLimit(32 << 20)
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
+	messages := make(chan []byte, 1)
+	go func() {
+		defer cancel()
+		defer close(messages)
 		for {
-			line, err := reader.ReadBytes('\n')
+			_, message, err := conn.ReadMessage()
 			if err != nil {
-				if err != io.EOF {
-					logger.Error(fmt.Sprintf("WebSocket 读取响应错误: %v", err))
-				}
-				break
+				return
 			}
-
-			lineStr := strings.TrimSpace(string(line))
-			if lineStr == "" {
+			select {
+			case messages <- message:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.POST("/chat", auth.APIKeyAuth(), OpenAIChatCompletions)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case message, ok := <-messages:
+			if !ok {
+				return
+			}
+			var payload map[string]interface{}
+			if json.Unmarshal(message, &payload) != nil || payload == nil {
+				conn.WriteJSON(gin.H{"error": gin.H{"message": "无效的 JSON"}})
 				continue
 			}
-
-			// 解析 SSE 数据提取 token 信息
-			if strings.HasPrefix(lineStr, "data: ") && !strings.Contains(lineStr, "[DONE]") {
-				jsonData := strings.TrimPrefix(lineStr, "data: ")
-				var chunk map[string]interface{}
-				if json.Unmarshal([]byte(jsonData), &chunk) == nil {
-					// 提取 usage 信息
-					if usage, ok := chunk["usage"].(map[string]interface{}); ok {
-						if pt, ok := usage["prompt_tokens"].(float64); ok {
-							totalPromptTokens = int(pt)
-						}
-						if ct, ok := usage["completion_tokens"].(float64); ok {
-							totalCompletionTokens = int(ct)
-						}
-						if tt, ok := usage["total_tokens"].(float64); ok {
-							totalTotalTokens = int(tt)
-						}
-					}
-					// 累积输出内容用于估算
-					if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
-						if choice, ok := choices[0].(map[string]interface{}); ok {
-							if delta, ok := choice["delta"].(map[string]interface{}); ok {
-								if content, ok := delta["content"].(string); ok {
-									estimatedOutputContent.WriteString(content)
-								}
-							}
-						}
-					}
-				}
-			}
-
-			// 发送 SSE 数据到 WebSocket
-			if err := conn.WriteMessage(websocket.TextMessage, []byte(lineStr)); err != nil {
-				logger.Error(fmt.Sprintf("WebSocket 写入错误: %v", err))
-				break
-			}
-
-			// 检查是否结束
-			if lineStr == "data: [DONE]" {
-				break
-			}
+			payload["stream"] = true
+			body, _ := json.Marshal(payload)
+			req, _ := http.NewRequestWithContext(ctx, "POST", "/chat", strings.NewReader(string(body)))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", c.GetHeader("Authorization"))
+			req.RemoteAddr = c.Request.RemoteAddr
+			writer := &wsResponseWriter{conn: conn, header: make(http.Header), ctx: ctx, cancel: cancel}
+			r.ServeHTTP(writer, req)
 		}
-		resp.Body.Close()
-
-		duration := time.Since(startTime).Seconds()
-
-		// 记录 token 使用情况
-		displayName := modelName
-		if model != nil && model.DisplayName != "" {
-			displayName = model.DisplayName
-		}
-		providerName := "unknown"
-		if provider != nil {
-			providerName = provider.Name
-		}
-
-		if totalTotalTokens > 0 {
-			RecordTokenUsage(displayName, providerName, totalPromptTokens, totalCompletionTokens, totalTotalTokens)
-			logger.Info(fmt.Sprintf("WebSocket | %s | Token: %d", modelName, totalTotalTokens))
-		} else {
-			// 使用估算值
-			estimatedInputTokens := estimatedInputChars / 3
-			if estimatedInputTokens < 1 && estimatedInputChars > 0 {
-				estimatedInputTokens = 1
-			}
-			outputContent := estimatedOutputContent.String()
-			estimatedOutputTokens := len(outputContent) / 3
-			if estimatedOutputTokens < 1 && len(outputContent) > 0 {
-				estimatedOutputTokens = 1
-			}
-			if estimatedInputTokens > 0 || estimatedOutputTokens > 0 {
-				estimatedTotal := estimatedInputTokens + estimatedOutputTokens
-				RecordTokenUsage(displayName, providerName, estimatedInputTokens, estimatedOutputTokens, estimatedTotal)
-				logger.Info(fmt.Sprintf("WebSocket | %s | Token估算: ~%d", modelName, estimatedTotal))
-			}
-		}
-
-		logger.Info(fmt.Sprintf("WebSocket | %s | %.2fs", modelName, duration))
-		logger.RequestSuccess()
 	}
 }

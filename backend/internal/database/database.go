@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -22,7 +23,7 @@ func Init(dbPath string) error {
 	}
 
 	var err error
-	db, err = sql.Open("sqlite", dbPath+"?_journal_mode=WAL")
+	db, err = sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)")
 	if err != nil {
 		return err
 	}
@@ -147,9 +148,7 @@ func createTables() error {
 	migrateAddMissingColumns()
 
 	// 迁移：将 providers 表中的 api_key 迁移到 provider_api_keys 表
-	migrateProviderAPIKeys()
-
-	return nil
+	return migrateProviderAPIKeys()
 }
 
 // migrateAddMissingColumns 添加缺失的列
@@ -170,33 +169,19 @@ func migrateAddMissingColumns() {
 }
 
 // migrateProviderAPIKeys 将 providers 表中的 api_key 迁移到 provider_api_keys 表
-func migrateProviderAPIKeys() {
-	// 查找所有有 api_key 但在 provider_api_keys 表中没有记录的提供商
-	rows, err := db.Query(`
-		SELECT p.id, p.api_key, p.created_at 
-		FROM providers p 
-		WHERE p.api_key != '' AND p.api_key IS NOT NULL
-		AND NOT EXISTS (SELECT 1 FROM provider_api_keys pk WHERE pk.provider_id = p.id)
-	`)
+func migrateProviderAPIKeys() error {
+	// A single statement avoids holding the only connection while inserting rows.
+	_, err := db.Exec(`INSERT INTO provider_api_keys (provider_id, api_key, name, is_active, created_at)
+		SELECT p.id, p.api_key, '密钥 1', 1, p.created_at FROM providers p
+		WHERE p.api_key != '' AND NOT EXISTS
+		(SELECT 1 FROM provider_api_keys k WHERE k.provider_id = p.id AND k.api_key = p.api_key)`)
 	if err != nil {
-		return
+		return fmt.Errorf("migrate provider keys: %w", err)
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var providerID int
-		var apiKey string
-		var createdAt time.Time
-		if err := rows.Scan(&providerID, &apiKey, &createdAt); err != nil {
-			continue
-		}
-
-		// 插入到 provider_api_keys 表
-		db.Exec(`
-			INSERT INTO provider_api_keys (provider_id, api_key, name, is_active, created_at)
-			VALUES (?, ?, '密钥 1', 1, ?)
-		`, providerID, apiKey, createdAt)
+	if _, err := db.Exec("UPDATE providers SET api_key = '' WHERE api_key != ''"); err != nil {
+		return err
 	}
+	return nil
 }
 
 // GetOrCreateSecretKey 获取或创建持久化的 SecretKey
@@ -228,6 +213,15 @@ func EnsureAdmin(username, password string) error {
 	}
 
 	if count == 0 {
+		if password == "" {
+			b := make([]byte, 18)
+			if _, err := rand.Read(b); err != nil {
+				return err
+			}
+			password = hex.EncodeToString(b)
+			log.Printf("Initial administrator %s password: %s (change after login)", username, password)
+		}
+
 		// 管理员不存在，创建新管理员
 		hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 		if err != nil {
@@ -241,15 +235,8 @@ func EnsureAdmin(username, password string) error {
 		return err
 	}
 
-	// 管理员已存在，检查是否需要更新密码（仅当环境变量设置时）
-	if envPwd := os.Getenv("ADMIN_PASSWORD"); envPwd != "" && envPwd != "admin123" {
-		hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-		if err != nil {
-			return err
-		}
-		_, err = db.Exec("UPDATE users SET hashed_password = ? WHERE username = ?", string(hashed), username)
-		return err
-	}
+	// Existing database credentials are preserved across upgrades.
+
 	return nil
 }
 

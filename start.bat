@@ -100,7 +100,7 @@ echo.
 echo ========================================
 echo   VTE 已启动
 echo   访问地址: http://127.0.0.1:8050
-echo   默认账号: admin / admin123
+echo   管理员: admin；初始密码见启动日志或 ADMIN_PASSWORD
 echo   按 Ctrl+C 停止服务
 echo ========================================
 echo.
