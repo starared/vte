@@ -340,11 +340,7 @@ func ConsumeTempAPIUsage(keyID int, model string) error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		}
-	}()
+	defer tx.Rollback() // Also release the transaction on quota/expiry early returns.
 
 	var maxReq, usedReq int
 	var limitsStr, usageStr, expiresRaw sql.NullString

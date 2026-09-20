@@ -31,7 +31,7 @@ docker run -d \
   rtyedfty/vte
 ```
 
-然后访问 http://你的IP:8050，默认账号 `admin` / `admin123`
+然后访问 http://你的IP:8050，默认用户名 `admin`；未设置 `ADMIN_PASSWORD` 时，首次启动随机密码见 `docker logs vte`
 
 **自定义端口和密码：**
 ```bash
@@ -151,9 +151,9 @@ cd ../backend && go mod tidy && go build -o vte .
 ## 📖 快速开始
 
 ### 1. 访问 Web 界面
-访问 http://127.0.0.1:8050 并使用默认账号登录：
+访问 http://127.0.0.1:8050 并使用管理员账号登录：
 - 用户名：`admin`
-- 密码：`admin123`
+- 密码：首次启动日志中的随机密码，或首次启动时设置的 `ADMIN_PASSWORD`
 
 ### 2. 添加提供商
 - 点击"添加提供商"按钮
@@ -208,8 +208,8 @@ print(response.choices[0].message.content)
 ### 流式模式控制
 进入设置 → 流式模式，控制流式行为：
 - **自动**：跟随客户端请求（默认）
-- **强制流式**：所有请求使用流式
-- **强制非流式**：所有请求使用非流式
+- **强制流式**：上游使用流式，返回格式仍遵循客户端请求
+- **强制非流式**：上游使用非流式，返回格式仍遵循客户端请求
 
 ### 模型前缀
 添加前缀来组织不同提供商的模型：
@@ -231,7 +231,7 @@ print(response.choices[0].message.content)
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `ADMIN_PASSWORD` | 管理员账号密码 | `admin123` |
+| `ADMIN_PASSWORD` | 仅初始化新管理员；不会重置已有密码 | 首次启动随机生成 |
 | `SECRET_KEY` | JWT 认证密钥 | 自动生成 |
 | `DATABASE_PATH` | SQLite 数据库文件路径 | `./data/gateway.db` |
 
@@ -250,7 +250,7 @@ VTE 支持任何 OpenAI 兼容的 API。以下是一些示例：
 | 提供商 | 类型 | API 地址 | 备注 |
 |--------|------|----------|------|
 | OpenAI | 标准 | `https://api.openai.com/v1` | 官方 OpenAI API |
-| Anthropic Claude | 标准 | `https://api.anthropic.com/v1` | Claude API |
+| Anthropic Claude | 标准 | 第三方 OpenAI 兼容转换端点 | 不支持直接对接原生 Messages API |
 | Google Gemini | Vertex Express | 无 | 需要项目 ID |
 | Ollama | 标准 | `http://localhost:11434/v1` | 本地模型 |
 | Azure OpenAI | 标准 | `https://{resource}.openai.azure.com/v1` | Azure 端点 |
@@ -307,6 +307,11 @@ vte/
 ---
 
 ## 📝 更新日志
+
+### v1.0.10
+- 修复轮询、事务锁、取消请求、限流和流式转换。完整变更及升级注意事项见 [CHANGELOG.md](CHANGELOG.md)。
+- Nginx 反代参考 [deploy/nginx.conf.example](deploy/nginx.conf.example)。Compose 默认仅本机访问。
+- `UPSTREAM_TIMEOUT_SECONDS` 可调整上游总超时；`INCLUDE_STREAM_USAGE=false` 可关闭自动添加 usage 参数。
 
 ### v1.0.5
 - ✅ **多密钥支持** - 每个提供商支持添加多个 API Key，自动轮询使用

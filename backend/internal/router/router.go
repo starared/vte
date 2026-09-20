@@ -2,7 +2,9 @@ package router
 
 import (
 	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -20,7 +22,7 @@ func CORSMiddleware() gin.HandlerFunc {
 		}
 
 		c.Header("Access-Control-Allow-Origin", origin)
-		c.Header("Access-Control-Allow-Credentials", "true")
+		c.Header("Vary", "Origin")
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
 		c.Header("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
 		c.Header("Access-Control-Max-Age", "86400")
@@ -37,6 +39,13 @@ func CORSMiddleware() gin.HandlerFunc {
 func Setup(cfg *config.Config) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	trusted := []string{"127.0.0.1", "::1"}
+	if value := os.Getenv("TRUSTED_PROXIES"); value != "" {
+		trusted = strings.Split(value, ",")
+	}
+	if err := r.SetTrustedProxies(trusted); err != nil {
+		panic(err)
+	}
 	r.Use(gin.Recovery())
 	r.Use(CORSMiddleware())
 

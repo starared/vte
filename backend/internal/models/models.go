@@ -22,9 +22,9 @@ type TempAPIKey struct {
 	ModelUsage       map[string]int `json:"model_usage"`
 	MaxRequests      int            `json:"max_requests"`
 	UsedRequests     int            `json:"used_requests"`
-	RateLimitCount   int            `json:"rate_limit_count"`   // 速率限制：请求数
-	RateLimitWindow  int            `json:"rate_limit_window"`  // 速率限制：时间窗口(秒)
-	RateLimitUnit    string         `json:"rate_limit_unit"`    // 速率限制单位: seconds, minutes, hours
+	RateLimitCount   int            `json:"rate_limit_count"`  // 速率限制：请求数
+	RateLimitWindow  int            `json:"rate_limit_window"` // 速率限制：时间窗口(秒)
+	RateLimitUnit    string         `json:"rate_limit_unit"`   // 速率限制单位: seconds, minutes, hours
 	ConcurrencyLimit int            `json:"concurrency_limit"` // 并发限制
 	ExpireDuration   int            `json:"expire_duration"`   // 有效期时长
 	ExpireUnit       string         `json:"expire_unit"`       // 有效期单位: minutes, hours, days
@@ -44,7 +44,7 @@ type Provider struct {
 	VertexProject  string    `json:"vertex_project,omitempty"`
 	VertexLocation string    `json:"vertex_location,omitempty"`
 	ExtraHeaders   string    `json:"-"`
-	ProxyURL       string    `json:"-"`
+	ProxyURL       string    `json:"proxy_url"`
 	IsActive       bool      `json:"is_active"`
 	CreatedAt      time.Time `json:"created_at"`
 }
@@ -69,6 +69,7 @@ type APIKeyCreate struct {
 
 // APIKeyUpdate 更新密钥请求
 type APIKeyUpdate struct {
+	APIKey   *string `json:"api_key"`
 	Name     *string `json:"name"`
 	IsActive *bool   `json:"is_active"`
 }
@@ -111,12 +112,12 @@ type TempAPIKeyCreateRequest struct {
 	AllowedModels    []string       `json:"allowed_models" binding:"required"`
 	ModelLimits      map[string]int `json:"model_limits"`
 	MaxRequests      int            `json:"max_requests"`
-	RateLimitCount   int            `json:"rate_limit_count"`   // 速率限制：请求数
-	RateLimitWindow  int            `json:"rate_limit_window"`  // 速率限制：时间窗口
-	RateLimitUnit    string         `json:"rate_limit_unit"`    // 速率限制单位: seconds, minutes, hours
-	ConcurrencyLimit int            `json:"concurrency_limit"`  // 并发限制
-	ExpireDuration   int            `json:"expire_duration"`    // 有效期时长
-	ExpireUnit       string         `json:"expire_unit"`        // minutes, hours, days
+	RateLimitCount   int            `json:"rate_limit_count"`  // 速率限制：请求数
+	RateLimitWindow  int            `json:"rate_limit_window"` // 速率限制：时间窗口
+	RateLimitUnit    string         `json:"rate_limit_unit"`   // 速率限制单位: seconds, minutes, hours
+	ConcurrencyLimit int            `json:"concurrency_limit"` // 并发限制
+	ExpireDuration   int            `json:"expire_duration"`   // 有效期时长
+	ExpireUnit       string         `json:"expire_unit"`       // minutes, hours, days
 	IsActive         *bool          `json:"is_active"`
 }
 

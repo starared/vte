@@ -1,11 +1,15 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +28,7 @@ type ProviderConfig struct {
 	VertexLocation string
 	ExtraHeaders   map[string]string
 	ProxyURL       string
+	BeforeAttempt  func()
 }
 
 func getClient(proxyURL string) *http.Client {
@@ -56,7 +61,7 @@ func getClient(proxyURL string) *http.Client {
 
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   300 * time.Second,
+		Timeout:   upstreamTimeout(),
 	}
 
 	clientPool[proxyURL] = client
@@ -65,6 +70,9 @@ func getClient(proxyURL string) *http.Client {
 
 func InvalidateClient(proxyURL string) {
 	poolMu.Lock()
+	if client := clientPool[proxyURL]; client != nil {
+		client.CloseIdleConnections()
+	}
 	delete(clientPool, proxyURL)
 	poolMu.Unlock()
 }
@@ -115,15 +123,15 @@ func (cfg *ProviderConfig) getQueryParams() url.Values {
 }
 
 // ListModels 获取模型列表
-func (cfg *ProviderConfig) ListModels() ([]map[string]interface{}, error) {
+func (cfg *ProviderConfig) ListModels(ctx context.Context) ([]map[string]interface{}, error) {
 	modelsURL := cfg.getModelsURL()
 	if modelsURL == "" {
-		return nil, nil
+		return nil, fmt.Errorf("this provider does not support model discovery")
 	}
 
 	client := getClient(cfg.ProxyURL)
 
-	req, err := http.NewRequest("GET", modelsURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", modelsURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +144,9 @@ func (cfg *ProviderConfig) ListModels() ([]map[string]interface{}, error) {
 		req.URL.RawQuery = params.Encode()
 	}
 
+	if cfg.BeforeAttempt != nil {
+		cfg.BeforeAttempt()
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -143,27 +154,35 @@ func (cfg *ProviderConfig) ListModels() ([]map[string]interface{}, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
-		Data []map[string]interface{} `json:"data"`
+		Data *[]map[string]interface{} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
 
-	return result.Data, nil
+	if result.Data == nil {
+		return nil, fmt.Errorf("invalid model list: data must be an array")
+	}
+	for _, model := range *result.Data {
+		if id, ok := model["id"].(string); !ok || strings.TrimSpace(id) == "" {
+			return nil, fmt.Errorf("invalid model list: missing model id")
+		}
+	}
+	return *result.Data, nil
 }
 
 // ChatCompletion 非流式请求（带重试）
 func (cfg *ProviderConfig) ChatCompletion(payload map[string]interface{}) (map[string]interface{}, error) {
-	return cfg.ChatCompletionWithRetry(payload, 3) // 默认3次重试
+	return cfg.ChatCompletionWithRetry(context.Background(), payload, 3) // 默认3次重试
 }
 
 // ChatCompletionWithRetry 带重试的非流式请求
-func (cfg *ProviderConfig) ChatCompletionWithRetry(payload map[string]interface{}, maxRetries int) (map[string]interface{}, error) {
+func (cfg *ProviderConfig) ChatCompletionWithRetry(ctx context.Context, payload map[string]interface{}, maxRetries int) (map[string]interface{}, error) {
 	client := getClient(cfg.ProxyURL)
 
 	body, err := json.Marshal(payload)
@@ -177,10 +196,12 @@ func (cfg *ProviderConfig) ChatCompletionWithRetry(payload map[string]interface{
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			// 指数退避：100ms, 200ms, 400ms...
-			time.Sleep(time.Duration(100*(1<<(attempt-1))) * time.Millisecond)
+			if err := retryWait(ctx, attempt); err != nil {
+				return nil, err
+			}
 		}
 
-		req, err := http.NewRequest("POST", chatURL, strings.NewReader(string(body)))
+		req, err := http.NewRequestWithContext(ctx, "POST", chatURL, strings.NewReader(string(body)))
 		if err != nil {
 			return nil, err
 		}
@@ -193,9 +214,19 @@ func (cfg *ProviderConfig) ChatCompletionWithRetry(payload map[string]interface{
 			req.URL.RawQuery = params.Encode()
 		}
 
+		if cfg.BeforeAttempt != nil {
+			cfg.BeforeAttempt()
+		}
 		resp, err := client.Do(req)
 		if err != nil {
-			lastErr = err
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				lastErr = context.DeadlineExceeded
+			} else {
+				lastErr = errors.New("upstream network request failed")
+			}
 			continue // 网络错误，重试
 		}
 
@@ -206,29 +237,32 @@ func (cfg *ProviderConfig) ChatCompletionWithRetry(payload map[string]interface{
 				resp.Body.Close()
 				return nil, err
 			}
+			if result == nil {
+				return nil, fmt.Errorf("invalid upstream response: expected object")
+			}
 			return result, nil
 		}
 
 		// 5xx 错误重试，4xx 不重试
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
-		lastErr = fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
+		lastErr = &UpstreamError{Status: resp.StatusCode, Body: respBody, RetryAfter: resp.Header.Get("Retry-After")}
 
 		if resp.StatusCode < 500 {
 			return nil, lastErr // 4xx 错误不重试
 		}
 	}
 
-	return nil, fmt.Errorf("max retries exceeded: %v", lastErr)
+	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
 }
 
 // ChatCompletionStream 流式请求（带重试）
 func (cfg *ProviderConfig) ChatCompletionStream(payload map[string]interface{}) (*http.Response, error) {
-	return cfg.ChatCompletionStreamWithRetry(payload, 3) // 默认3次重试
+	return cfg.ChatCompletionStreamWithRetry(context.Background(), payload, 3) // 默认3次重试
 }
 
 // ChatCompletionStreamWithRetry 带重试的流式请求
-func (cfg *ProviderConfig) ChatCompletionStreamWithRetry(payload map[string]interface{}, maxRetries int) (*http.Response, error) {
+func (cfg *ProviderConfig) ChatCompletionStreamWithRetry(ctx context.Context, payload map[string]interface{}, maxRetries int) (*http.Response, error) {
 	client := getClient(cfg.ProxyURL)
 
 	body, err := json.Marshal(payload)
@@ -242,10 +276,12 @@ func (cfg *ProviderConfig) ChatCompletionStreamWithRetry(payload map[string]inte
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			// 指数退避
-			time.Sleep(time.Duration(100*(1<<(attempt-1))) * time.Millisecond)
+			if err := retryWait(ctx, attempt); err != nil {
+				return nil, err
+			}
 		}
 
-		req, err := http.NewRequest("POST", chatURL, strings.NewReader(string(body)))
+		req, err := http.NewRequestWithContext(ctx, "POST", chatURL, strings.NewReader(string(body)))
 		if err != nil {
 			return nil, err
 		}
@@ -258,9 +294,19 @@ func (cfg *ProviderConfig) ChatCompletionStreamWithRetry(payload map[string]inte
 			req.URL.RawQuery = params.Encode()
 		}
 
+		if cfg.BeforeAttempt != nil {
+			cfg.BeforeAttempt()
+		}
 		resp, err := client.Do(req)
 		if err != nil {
-			lastErr = err
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				lastErr = context.DeadlineExceeded
+			} else {
+				lastErr = errors.New("upstream network request failed")
+			}
 			continue // 网络错误，重试
 		}
 
@@ -269,14 +315,42 @@ func (cfg *ProviderConfig) ChatCompletionStreamWithRetry(payload map[string]inte
 		}
 
 		// 5xx 错误重试，4xx 不重试
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
-		lastErr = fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
+		lastErr = &UpstreamError{Status: resp.StatusCode, Body: respBody, RetryAfter: resp.Header.Get("Retry-After")}
 
 		if resp.StatusCode < 500 {
 			return nil, lastErr
 		}
 	}
 
-	return nil, fmt.Errorf("max retries exceeded: %v", lastErr)
+	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+// UpstreamError preserves the HTTP contract without exposing request credentials.
+type UpstreamError struct {
+	Status     int
+	Body       []byte
+	RetryAfter string
+}
+
+func (e *UpstreamError) Error() string {
+	return fmt.Sprintf("upstream status %d: %s", e.Status, e.Body)
+}
+func retryWait(ctx context.Context, attempt int) error {
+	timer := time.NewTimer(time.Duration(100*(1<<uint(attempt-1))) * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+func upstreamTimeout() time.Duration {
+	seconds, err := strconv.Atoi(os.Getenv("UPSTREAM_TIMEOUT_SECONDS"))
+	if err != nil || seconds <= 0 || seconds > 86400 {
+		seconds = 300
+	}
+	return time.Duration(seconds) * time.Second
 }

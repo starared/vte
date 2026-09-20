@@ -50,7 +50,7 @@ func GenerateToken(username string) (string, error) {
 func ParseToken(tokenString string) (string, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		return []byte(secretKey), nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
 	if err != nil {
 		return "", err
 	}
@@ -134,7 +134,7 @@ func APIKeyAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
-			c.JSON(401, gin.H{"detail": "缺少 API Key"})
+			c.JSON(401, gin.H{"error": gin.H{"message": "缺少 API Key", "type": "authentication_error"}, "detail": "缺少 API Key"})
 			c.Abort()
 			return
 		}
@@ -149,17 +149,17 @@ func APIKeyAuth() gin.HandlerFunc {
 		// 尝试临时 API Key
 		if tempKey, err := database.GetTempAPIKeyByToken(apiKey); err == nil {
 			if !tempKey.IsActive {
-				c.JSON(401, gin.H{"detail": "API Key 已禁用"})
+				c.JSON(401, gin.H{"error": gin.H{"message": "API Key 已禁用", "type": "authentication_error"}, "detail": "API Key 已禁用"})
 				c.Abort()
 				return
 			}
 			if tempKey.ExpiresAt != nil && time.Now().After(*tempKey.ExpiresAt) {
-				c.JSON(401, gin.H{"detail": "API Key 已过期"})
+				c.JSON(401, gin.H{"error": gin.H{"message": "API Key 已过期", "type": "authentication_error"}, "detail": "API Key 已过期"})
 				c.Abort()
 				return
 			}
 			if tempKey.MaxRequests > 0 && tempKey.UsedRequests >= tempKey.MaxRequests {
-				c.JSON(429, gin.H{"detail": "API Key 请求次数已用尽"})
+				c.JSON(429, gin.H{"error": gin.H{"message": "API Key 请求次数已用尽", "type": "authentication_error"}, "detail": "API Key 请求次数已用尽"})
 				c.Abort()
 				return
 			}
@@ -169,7 +169,7 @@ func APIKeyAuth() gin.HandlerFunc {
 			return
 		}
 
-		c.JSON(401, gin.H{"detail": "无效的 API Key"})
+		c.JSON(401, gin.H{"error": gin.H{"message": "无效的 API Key", "type": "authentication_error"}, "detail": "无效的 API Key"})
 		c.Abort()
 	}
 }

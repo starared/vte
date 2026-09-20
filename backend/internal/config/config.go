@@ -24,7 +24,7 @@ func Load() *Config {
 		DatabasePath:  getEnv("DATABASE_PATH", "./data/gateway.db"),
 		SecretKey:     getEnv("SECRET_KEY", ""), // 如果为空，后续从数据库获取
 		AdminUsername: getEnv("ADMIN_USERNAME", "admin"),
-		AdminPassword: getEnv("ADMIN_PASSWORD", "admin123"),
+		AdminPassword: getEnv("ADMIN_PASSWORD", ""),
 	}
 	return cfg
 }

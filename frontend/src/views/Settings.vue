@@ -28,7 +28,7 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item>
-          <span class="hint-text">自动：根据客户端请求的 stream 参数决定；强制模式会覆盖客户端设置</span>
+          <span class="hint-text">自动：跟随客户端；强制模式只改变上游调用方式，返回格式仍遵循客户端请求</span>
         </el-form-item>
         
         <el-form-item label="最大重试次数">

@@ -58,7 +58,7 @@
         <template v-if="form.provider_type === 'standard'">
           <el-form-item label="API 地址" required>
             <el-input v-model="form.base_url" placeholder="https://api.openai.com/v1" />
-            <div class="form-tip">完整地址，需包含 /v1（如 https://api.openai.com/v1）</div>
+            <div class="form-tip">填写服务商的基础地址（如 https://api.openai.com/v1），不要附加 /chat/completions</div>
           </el-form-item>
         </template>
         
@@ -254,7 +254,7 @@ function showAdd() {
 
 async function editProvider(row) {
   editingId.value = row.id
-  form.value = { ...row, api_key: '' }
+  form.value = { ...row, proxy_url: row.proxy_url || '', api_key: '' }
   dialogVisible.value = true
 }
 

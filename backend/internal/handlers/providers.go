@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -17,7 +18,7 @@ func ListProviders(c *gin.Context) {
 	db := database.DB()
 	rows, err := db.Query(`
 		SELECT id, name, base_url, model_prefix, provider_type, 
-		       vertex_project, vertex_location, is_active, created_at 
+		       vertex_project, vertex_location, COALESCE(proxy_url, ''), is_active, created_at
 		FROM providers
 	`)
 	if err != nil {
@@ -26,13 +27,13 @@ func ListProviders(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	var providers []models.Provider
+	providers := make([]models.Provider, 0)
 	for rows.Next() {
 		var p models.Provider
 		var isActive int
 		var vertexProject, vertexLocation *string
 		err := rows.Scan(&p.ID, &p.Name, &p.BaseURL, &p.ModelPrefix, &p.ProviderType,
-			&vertexProject, &vertexLocation, &isActive, &p.CreatedAt)
+			&vertexProject, &vertexLocation, &p.ProxyURL, &isActive, &p.CreatedAt)
 		if err != nil {
 			continue
 		}
@@ -63,8 +64,18 @@ func CreateProvider(c *gin.Context) {
 		req.VertexLocation = "global"
 	}
 
+	if err := validateProvider(req.ProviderType, req.BaseURL, req.VertexProject, req.ExtraHeaders, req.ProxyURL); err != nil {
+		c.JSON(400, gin.H{"detail": err.Error()})
+		return
+	}
 	db := database.DB()
-	result, err := db.Exec(`
+	tx, err := db.Begin()
+	if err != nil {
+		c.JSON(500, gin.H{"detail": "创建失败"})
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`
 		INSERT INTO providers (name, base_url, api_key, model_prefix, provider_type, 
 		                       vertex_project, vertex_location, extra_headers, proxy_url)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -80,12 +91,19 @@ func CreateProvider(c *gin.Context) {
 
 	// 将 API Key 添加到 provider_api_keys 表
 	if req.APIKey != "" {
-		db.Exec(`
+		if _, err = tx.Exec(`
 			INSERT INTO provider_api_keys (provider_id, api_key, name)
 			VALUES (?, ?, ?)
-		`, id, req.APIKey, "密钥 1")
+		`, id, req.APIKey, "密钥 1"); err != nil {
+			c.JSON(500, gin.H{"detail": "添加密钥失败"})
+			return
+		}
 	}
 
+	if err = tx.Commit(); err != nil {
+		c.JSON(500, gin.H{"detail": "创建失败"})
+		return
+	}
 	logger.Info(fmt.Sprintf("%s | 添加提供商 | %s", c.ClientIP(), req.Name))
 
 	c.JSON(200, gin.H{
@@ -125,6 +143,35 @@ func UpdateProvider(c *gin.Context) {
 		return
 	}
 
+	var providerType, project, headers string
+	if err := db.QueryRow("SELECT provider_type,COALESCE(vertex_project,''),COALESCE(extra_headers,'') FROM providers WHERE id=?", id).Scan(&providerType, &project, &headers); err != nil {
+		c.JSON(500, gin.H{"detail": "查询失败"})
+		return
+	}
+	newBase, newProxy := baseURL, proxyURL
+	if req.ProviderType != nil {
+		providerType = *req.ProviderType
+	}
+	if req.BaseURL != nil {
+		newBase = *req.BaseURL
+	}
+	if req.VertexProject != nil {
+		project = *req.VertexProject
+	}
+	if req.ExtraHeaders != nil {
+		headers = *req.ExtraHeaders
+	}
+	if req.ProxyURL != nil {
+		newProxy = *req.ProxyURL
+	}
+	if err := validateProvider(providerType, newBase, project, headers, newProxy); err != nil {
+		c.JSON(400, gin.H{"detail": err.Error()})
+		return
+	}
+	if req.APIKey != nil && *req.APIKey != "" {
+		c.JSON(400, gin.H{"detail": "请通过密钥管理接口更新密钥，避免与轮询密钥冲突"})
+		return
+	}
 	// 构建更新语句
 	updates := []string{}
 	args := []interface{}{}
@@ -136,10 +183,6 @@ func UpdateProvider(c *gin.Context) {
 	if req.BaseURL != nil {
 		updates = append(updates, "base_url = ?")
 		args = append(args, *req.BaseURL)
-	}
-	if req.APIKey != nil && *req.APIKey != "" {
-		updates = append(updates, "api_key = ?")
-		args = append(args, *req.APIKey)
 	}
 	if req.ModelPrefix != nil {
 		updates = append(updates, "model_prefix = ?")
@@ -278,13 +321,17 @@ func FetchModels(c *gin.Context) {
 		json.Unmarshal([]byte(*extraHeaders), &cfg.ExtraHeaders)
 	}
 
-	modelsData, err := cfg.ListModels()
+	modelsData, err := cfg.ListModels(c.Request.Context())
 	if err != nil {
 		logger.Error(fmt.Sprintf("%s | 拉取模型失败 | %s | %v", c.ClientIP(), name, err))
 		c.JSON(500, gin.H{"detail": fmt.Sprintf("拉取模型失败: %v", err)})
 		return
 	}
 
+	if len(modelsData) == 0 {
+		c.JSON(409, gin.H{"detail": "上游返回空模型列表；已保留现有模型，请手动确认后删除"})
+		return
+	}
 	// 获取现有模型
 	existingModels := make(map[string]int)
 	customNameModels := make(map[string]bool) // 标记哪些模型有自定义名称
@@ -439,4 +486,40 @@ func ListProviderModels(c *gin.Context) {
 	}
 
 	c.JSON(200, result)
+}
+
+func validateProvider(kind, base, project, headers, proxyAddress string) error {
+	if kind != "standard" && kind != "vertex_express" {
+		return fmt.Errorf("不支持的提供商类型")
+	}
+	if kind == "standard" {
+		u, err := url.Parse(base)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("API 地址必须为不含查询参数的 HTTP(S) 基础地址")
+		}
+		if strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/chat/completions") {
+			return fmt.Errorf("请填写基础地址，不要包含 /chat/completions")
+		}
+	}
+	if kind == "vertex_express" && strings.TrimSpace(project) == "" {
+		return fmt.Errorf("请填写 Vertex 项目编号")
+	}
+	if headers != "" {
+		var h map[string]string
+		if json.Unmarshal([]byte(headers), &h) != nil || h == nil {
+			return fmt.Errorf("extra_headers 必须为字符串键值组成的 JSON 对象")
+		}
+		for k, v := range h {
+			if strings.ContainsAny(k+v, "\r\n") {
+				return fmt.Errorf("请求头不能包含换行")
+			}
+		}
+	}
+	if proxyAddress != "" {
+		u, err := url.Parse(proxyAddress)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "socks5" && u.Scheme != "socks5h") {
+			return fmt.Errorf("代理地址格式错误")
+		}
+	}
+	return nil
 }
