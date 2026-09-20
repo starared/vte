@@ -92,7 +92,7 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 
-const currentVersion = ref('1.0.10')
+const currentVersion = ref('1.0.11')
 const latestVersion = ref('')
 const loading = ref(false)
 

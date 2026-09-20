@@ -341,7 +341,7 @@ vte/
 
 ## 📝 Changelog
 
-### v1.0.10
+### v1.0.11
 - Fix key rotation, quota transactions, cancellation, limits and stream conversion. See [CHANGELOG.md](CHANGELOG.md) for migration notes.
 - See [Nginx example](deploy/nginx.conf.example). Compose binds to loopback by default.
 - Configure `UPSTREAM_TIMEOUT_SECONDS` (default 300) and `INCLUDE_STREAM_USAGE` (default true) as needed.

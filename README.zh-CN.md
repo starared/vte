@@ -308,7 +308,7 @@ vte/
 
 ## 📝 更新日志
 
-### v1.0.10
+### v1.0.11
 - 修复轮询、事务锁、取消请求、限流和流式转换。完整变更及升级注意事项见 [CHANGELOG.md](CHANGELOG.md)。
 - Nginx 反代参考 [deploy/nginx.conf.example](deploy/nginx.conf.example)。Compose 默认仅本机访问。
 - `UPSTREAM_TIMEOUT_SECONDS` 可调整上游总超时；`INCLUDE_STREAM_USAGE=false` 可关闭自动添加 usage 参数。
