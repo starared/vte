@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,27 @@ import (
 	"vte/internal/config"
 	"vte/internal/handlers"
 )
+
+// defaultMaxBodyBytes 网关请求体默认上限（32MB，与 WebSocket 读取上限一致）
+const defaultMaxBodyBytes = 32 << 20
+
+// maxBodyBytes 从环境变量读取请求体上限（MB），默认 32MB
+func maxBodyBytes() int64 {
+	if v := os.Getenv("MAX_REQUEST_BODY_MB"); v != "" {
+		if mb, err := strconv.Atoi(v); err == nil && mb > 0 {
+			return int64(mb) << 20
+		}
+	}
+	return defaultMaxBodyBytes
+}
+
+// BodyLimitMiddleware 限制请求体大小，避免超大请求体耗尽内存
+func BodyLimitMiddleware(maxBytes int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
+		c.Next()
+	}
+}
 
 // CORS 中间件
 func CORSMiddleware() gin.HandlerFunc {
@@ -154,7 +176,7 @@ func Setup(cfg *config.Config) *gin.Engine {
 	}
 
 	// OpenAI 兼容接口
-	v1 := r.Group("/v1", auth.APIKeyAuth())
+	v1 := r.Group("/v1", BodyLimitMiddleware(maxBodyBytes()), auth.APIKeyAuth())
 	{
 		v1.GET("/models", handlers.OpenAIListModels)
 		v1.POST("/chat/completions", handlers.OpenAIChatCompletions)

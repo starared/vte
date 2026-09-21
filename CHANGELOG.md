@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.12
+
+### Security and robustness
+
+- Limit gateway request body size to guard against memory exhaustion from oversized payloads. The default cap is 32MB (matching the WebSocket read limit) and is configurable via `MAX_REQUEST_BODY_MB`; requests exceeding it receive HTTP 413.
+- Add graceful shutdown: the server now handles `SIGINT`/`SIGTERM` (e.g. `docker stop`), draining in-flight requests for up to 30 seconds before exiting instead of terminating abruptly.
+- Upgrade dependencies for security and maintenance: `gin` 1.9.1 → 1.10.1, `golang.org/x/net` 0.17.0 → 0.33.0, `golang.org/x/crypto` 0.18.0 → 0.31.0, `golang-jwt/jwt/v5` 5.2.0 → 5.2.1, `gorilla/websocket` 1.5.1 → 1.5.3. Go 1.21 compatibility is retained.
+
+### Configuration
+
+- `MAX_REQUEST_BODY_MB` sets the maximum accepted request body size in megabytes (default 32).
+
 ## 1.0.11
 
 ### Gateway fixes
