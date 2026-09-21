@@ -154,6 +154,7 @@ cd backend
 | `ADMIN_PASSWORD` | Initial password for a new administrator only | Random at first startup |
 | `SECRET_KEY` | JWT secret | Auto-generated |
 | `DATABASE_PATH` | SQLite path | `./data/gateway.db` |
+| `MAX_REQUEST_BODY_MB` | Max gateway request body size (MB) | `32` |
 
 Example:
 ```bash
@@ -262,6 +263,7 @@ Click "Fetch Models" to:
 | `ADMIN_PASSWORD` | Initial password for a new administrator only | Random at first startup |
 | `SECRET_KEY` | JWT secret key for authentication | Auto-generated |
 | `DATABASE_PATH` | SQLite database file path | `./data/gateway.db` |
+| `MAX_REQUEST_BODY_MB` | Max gateway request body size (MB) | `32` |
 
 ### Docker Volumes
 
@@ -340,6 +342,11 @@ vte/
 ---
 
 ## 📝 Changelog
+
+### v1.0.12
+- Limit gateway request body size (default 32MB, configurable via `MAX_REQUEST_BODY_MB`) to prevent memory exhaustion; oversized requests return HTTP 413.
+- Graceful shutdown on `SIGINT`/`SIGTERM` (e.g. `docker stop`), draining in-flight requests before exit.
+- Dependency upgrades for security (`gin`, `golang.org/x/net`, `golang.org/x/crypto`, `golang-jwt`, `gorilla/websocket`); Go 1.21 compatibility retained. See [CHANGELOG.md](CHANGELOG.md).
 
 ### v1.0.11
 - Fix key rotation, quota transactions, cancellation, limits and stream conversion. See [CHANGELOG.md](CHANGELOG.md) for migration notes.

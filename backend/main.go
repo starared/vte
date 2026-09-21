@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"vte/internal/config"
@@ -67,8 +72,30 @@ func main() {
 		}
 	}
 
-	log.Printf("VTE started on %s:%d", cfg.Host, cfg.Port)
-	if err := r.Run(cfg.Addr()); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+	// 使用 http.Server 以支持优雅关闭
+	srv := &http.Server{
+		Addr:    cfg.Addr(),
+		Handler: r,
 	}
+
+	go func() {
+		log.Printf("VTE started on %s:%d", cfg.Host, cfg.Port)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	// 等待中断信号以优雅地关闭服务器（SIGINT / SIGTERM，例如 docker stop）
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Shutting down server...")
+
+	// 给进行中的请求最多 30 秒完成
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("Server forced to shutdown: %v", err)
+	}
+	log.Println("Server exited")
 }
