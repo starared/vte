@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.1.0
+
+### Frontend redesign
+
+- New warm-neutral visual theme with an emerald accent, applied through a
+  global stylesheet: Element Plus primary color and shades overridden, warm
+  off-white/gray surfaces, larger card radii, softer shadows, and unified
+  page headings.
+- Refreshed sidebar (warm gradient, brand dot, pill-style active menu item),
+  header, login page (warm emerald gradient) and statistic cards. Dark mode
+  updated to match.
+
+### Changes
+
+- Token statistics: removed the trend line chart (and the ECharts dependency
+  in the view); the page now shows the numeric overview cards and the
+  per-model table only. Server time / next-reset info moved to the footer.
+- Removed the Logs page, its navigation entry and route.
+- Fixed a memory leak on the token-stats page (a window `resize` listener was
+  never removed on unmount) and dropped some dead code.
+
 ## 1.0.12
 
 ### Security and robustness
