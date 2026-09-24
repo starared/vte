@@ -235,6 +235,10 @@ function renderHourlyChart() {
   hourlyChart.setOption(option)
 }
 
+function handleResize() {
+  if (hourlyChart) hourlyChart.resize()
+}
+
 function startAutoRefresh() {
   if (timer) clearInterval(timer)
   timer = setInterval(() => loadStats(false), 10000) // 每10秒刷新
@@ -250,15 +254,14 @@ function stopAutoRefresh() {
 onMounted(() => {
   loadStats()
   startAutoRefresh()
-  
+
   // 监听窗口大小变化
-  window.addEventListener('resize', () => {
-    if (hourlyChart) hourlyChart.resize()
-  })
+  window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
   stopAutoRefresh()
+  window.removeEventListener('resize', handleResize)
   if (hourlyChart) {
     hourlyChart.dispose()
     hourlyChart = null
