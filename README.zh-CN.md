@@ -234,6 +234,7 @@ print(response.choices[0].message.content)
 | `ADMIN_PASSWORD` | 仅初始化新管理员；不会重置已有密码 | 首次启动随机生成 |
 | `SECRET_KEY` | JWT 认证密钥 | 自动生成 |
 | `DATABASE_PATH` | SQLite 数据库文件路径 | `./data/gateway.db` |
+| `MAX_REQUEST_BODY_MB` | 网关请求体大小上限（MB） | `32` |
 
 ### Docker 数据卷
 
@@ -307,6 +308,17 @@ vte/
 ---
 
 ## 📝 更新日志
+
+### v1.1.0
+- 全新温暖中性界面主题（emerald 青绿强调色）：侧边栏、顶栏、登录页、卡片及暗色模式全面焕新。
+- Token 统计：移除趋势曲线图（保留数字总览与模型明细表）。
+- 移除「日志」页面及其导航入口。
+- 修复 Token 统计页的内存泄漏（未移除的 resize 监听器）。
+
+### v1.0.12
+- 限制网关请求体大小（默认 32MB，可通过 `MAX_REQUEST_BODY_MB` 配置），防止超大请求体耗尽内存；超限返回 HTTP 413。
+- 支持优雅关闭：收到 `SIGINT`/`SIGTERM`（如 `docker stop`）时，最多等待进行中的请求完成 30 秒后再退出，而非直接中断。
+- 依赖安全升级（`gin`、`golang.org/x/net`、`golang.org/x/crypto`、`golang-jwt`、`gorilla/websocket`），保持 Go 1.21 兼容。详见 [CHANGELOG.md](CHANGELOG.md)。
 
 ### v1.0.11
 - 修复轮询、事务锁、取消请求、限流和流式转换。完整变更及升级注意事项见 [CHANGELOG.md](CHANGELOG.md)。

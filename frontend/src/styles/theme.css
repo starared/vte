@@ -1,0 +1,143 @@
+/* ============================================================
+   VTE 温暖中性主题（emerald 青绿强调色）
+   在 Element Plus 样式之后引入，用于覆盖默认外观
+   ============================================================ */
+
+:root {
+  /* 主色：emerald */
+  --el-color-primary: #10b981;
+  --el-color-primary-light-3: #47c795;
+  --el-color-primary-light-5: #78d6b0;
+  --el-color-primary-light-7: #a9e5cb;
+  --el-color-primary-light-8: #c7eedd;
+  --el-color-primary-light-9: #e6f7f0;
+  --el-color-primary-dark-2: #0e9f6e;
+
+  /* 圆角整体加大，更柔和 */
+  --el-border-radius-base: 10px;
+  --el-border-radius-small: 8px;
+  --el-border-radius-round: 20px;
+
+  --el-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+
+  /* VTE 自定义强调色渐变（用于品牌元素） */
+  --vte-accent: #10b981;
+  --vte-accent-soft: #34d399;
+  --vte-accent-gradient: linear-gradient(135deg, #34d399 0%, #059669 100%);
+}
+
+/* 亮色：暖白 / 暖灰中性色 */
+html:not(.dark) {
+  --el-bg-color-page: #f6f5f1;
+  --el-bg-color: #ffffff;
+  --el-bg-color-overlay: #ffffff;
+  --el-text-color-primary: #2b2926;
+  --el-text-color-regular: #4b4843;
+  --el-text-color-secondary: #8c877f;
+  --el-border-color: #e7e3db;
+  --el-border-color-light: #eee9e1;
+  --el-border-color-lighter: #f1ece4;
+  --el-fill-color-light: #f4f1eb;
+  --el-fill-color-lighter: #faf8f4;
+}
+
+/* 暗色：偏暖的深色 */
+html.dark {
+  --el-bg-color-page: #1a1917;
+  --el-bg-color: #232120;
+  --el-text-color-primary: #ece8e2;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ---------- 卡片：大圆角 + 极柔阴影 ---------- */
+.el-card {
+  border-radius: 16px;
+  border: 1px solid var(--el-border-color-lighter);
+  box-shadow: 0 1px 2px rgba(41, 37, 36, 0.04),
+    0 8px 24px rgba(41, 37, 36, 0.05);
+  transition: box-shadow 0.28s ease, transform 0.28s ease;
+}
+html.dark .el-card {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+.el-card.is-hover-shadow:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 32px rgba(16, 185, 129, 0.14);
+}
+.el-card__header {
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  font-weight: 600;
+  font-size: 15px;
+  padding: 16px 20px;
+}
+.el-card__body {
+  padding: 20px;
+}
+
+/* ---------- 按钮 ---------- */
+.el-button {
+  border-radius: 10px;
+  font-weight: 500;
+}
+.el-button--primary {
+  --el-button-bg-color: #10b981;
+  --el-button-border-color: #10b981;
+  --el-button-hover-bg-color: #1cc08c;
+  --el-button-hover-border-color: #1cc08c;
+  --el-button-active-bg-color: #0e9f6e;
+  --el-button-active-border-color: #0e9f6e;
+}
+
+/* ---------- 输入框 ---------- */
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  border-radius: 10px;
+}
+
+/* ---------- 表格 ---------- */
+.el-table {
+  --el-table-border-color: var(--el-border-color-lighter);
+  border-radius: 12px;
+}
+.el-table th.el-table__cell {
+  background: var(--el-fill-color-light);
+  font-weight: 600;
+  color: var(--el-text-color-regular);
+}
+
+/* ---------- 标签 / 开关 ---------- */
+.el-switch.is-checked .el-switch__core {
+  --el-switch-on-color: var(--vte-accent);
+}
+
+/* ---------- 主内容区标题统一 ---------- */
+.el-main h2 {
+  font-size: 21px;
+  font-weight: 650;
+  color: var(--el-text-color-primary);
+  letter-spacing: 0.2px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.el-main h2::before {
+  content: '';
+  width: 4px;
+  height: 20px;
+  border-radius: 3px;
+  background: var(--vte-accent-gradient);
+}
+
+/* 对话框圆角 */
+.el-dialog {
+  border-radius: 16px;
+}
+.el-message-box {
+  border-radius: 16px;
+}

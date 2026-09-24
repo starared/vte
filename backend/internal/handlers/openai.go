@@ -511,6 +511,11 @@ func OpenAIChatCompletions(c *gin.Context) {
 	// 先解析请求获取模型名和stream参数，用于后续的自定义错误响应
 	var payload map[string]interface{}
 	if err := c.ShouldBindJSON(&payload); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			apiError(c, 413, "request_too_large", "请求体过大")
+			return
+		}
 		apiError(c, 400, "request_error", "无效的 JSON")
 		return
 	}
