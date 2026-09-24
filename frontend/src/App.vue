@@ -15,20 +15,22 @@ body {
   transition: background-color 0.3s, color 0.3s;
 }
 
-/* 暗色模式自定义变量 */
+/* 暗色模式自定义变量（偏暖深色） */
 html.dark {
-  --vte-sidebar-bg: #1d1e1f;
-  --vte-sidebar-text: #bfcbd9;
-  --vte-header-bg: #1d1e1f;
-  --vte-card-bg: #1d1e1f;
-  --vte-terminal-bg: #0d0d0d;
+  --vte-sidebar-bg: linear-gradient(180deg, #201d1b 0%, #17150f 100%);
+  --vte-sidebar-solid: #1c1a18;
+  --vte-sidebar-text: #cec8bf;
+  --vte-header-bg: #232120;
+  --vte-card-bg: #232120;
+  --vte-terminal-bg: #16140f;
 }
 
 html:not(.dark) {
-  --vte-sidebar-bg: #304156;
-  --vte-sidebar-text: #bfcbd9;
-  --vte-header-bg: #fff;
+  --vte-sidebar-bg: linear-gradient(180deg, #33302c 0%, #262320 100%);
+  --vte-sidebar-solid: #2b2825;
+  --vte-sidebar-text: #d8d2c8;
+  --vte-header-bg: #fffdfa;
   --vte-card-bg: #fff;
-  --vte-terminal-bg: #1e1e1e;
+  --vte-terminal-bg: #201d18;
 }
 </style>
