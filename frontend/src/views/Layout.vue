@@ -77,7 +77,7 @@ const themeStore = useThemeStore()
 const sidebarOpen = ref(false)
 const isMobile = ref(false)
 
-const sidebarWidth = computed(() => isMobile.value ? '200px' : '200px')
+const sidebarWidth = '200px'
 
 const menuBgColor = computed(() => {
   return themeStore.theme === 'dark' || 
