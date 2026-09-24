@@ -343,6 +343,12 @@ vte/
 
 ## 📝 Changelog
 
+### v1.1.0
+- New warm-neutral UI theme with an emerald accent: refreshed sidebar, header, login page, cards and dark mode.
+- Token statistics: removed the trend chart (numbers and per-model table remain).
+- Removed the Logs page and its navigation entry.
+- Fixed a token-stats page memory leak (unremoved resize listener).
+
 ### v1.0.12
 - Limit gateway request body size (default 32MB, configurable via `MAX_REQUEST_BODY_MB`) to prevent memory exhaustion; oversized requests return HTTP 413.
 - Graceful shutdown on `SIGINT`/`SIGTERM` (e.g. `docker stop`), draining in-flight requests before exit.

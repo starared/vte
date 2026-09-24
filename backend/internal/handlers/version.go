@@ -12,7 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const currentVersion = "1.0.12"
+const currentVersion = "1.1.0"
 
 func CheckVersion(c *gin.Context) {
 	// 尝试从多个可能的路径读取 VERSION 文件
