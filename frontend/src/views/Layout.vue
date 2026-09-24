@@ -4,8 +4,8 @@
     <div class="mobile-overlay" v-if="sidebarOpen" @click="sidebarOpen = false"></div>
     
     <el-aside :width="sidebarWidth" :class="{ 'mobile-open': sidebarOpen }">
-      <div class="logo">VTE</div>
-      <el-menu :default-active="route.path" router :background-color="menuBgColor" text-color="#bfcbd9" active-text-color="#409EFF" @select="handleMenuSelect">
+      <div class="logo"><span class="logo-dot"></span>VTE</div>
+      <el-menu :default-active="route.path" router background-color="transparent" :text-color="sidebarText" active-text-color="#34d399" @select="handleMenuSelect">
         <el-menu-item index="/dashboard">
           <el-icon><DataAnalysis /></el-icon>
           <span>仪表盘</span>
@@ -21,10 +21,6 @@
         <el-menu-item index="/temp-keys">
           <el-icon><Key /></el-icon>
           <span>临时 API</span>
-        </el-menu-item>
-        <el-menu-item index="/logs">
-          <el-icon><Document /></el-icon>
-          <span>请求日志</span>
         </el-menu-item>
         <el-menu-item index="/token-stats">
           <el-icon><TrendCharts /></el-icon>
@@ -77,13 +73,8 @@ const themeStore = useThemeStore()
 const sidebarOpen = ref(false)
 const isMobile = ref(false)
 
-const sidebarWidth = computed(() => isMobile.value ? '200px' : '200px')
-
-const menuBgColor = computed(() => {
-  return themeStore.theme === 'dark' || 
-    (themeStore.theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-    ? '#1d1e1f' : '#304156'
-})
+const sidebarWidth = '220px'
+const sidebarText = '#d8d2c8'
 
 const themeTooltip = computed(() => {
   const labels = { light: '亮色模式', dark: '暗色模式', auto: '跟随系统' }
@@ -122,23 +113,60 @@ onUnmounted(() => {
 .el-aside {
   background: var(--vte-sidebar-bg);
   transition: transform 0.3s, background-color 0.3s;
+  border-right: none;
 }
 .logo {
-  height: 60px;
-  line-height: 60px;
-  text-align: center;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
   color: #fff;
-  font-size: 18px;
-  font-weight: bold;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+.logo-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--vte-accent-gradient);
+  box-shadow: 0 0 12px rgba(52, 211, 153, 0.7);
+}
+/* 菜单项：圆角胶囊 + emerald 高亮 */
+.el-aside :deep(.el-menu) {
+  border-right: none;
+  padding: 8px 12px;
+}
+.el-aside :deep(.el-menu-item) {
+  height: 46px;
+  line-height: 46px;
+  border-radius: 12px;
+  margin: 4px 0;
+  transition: background-color 0.2s, color 0.2s;
+}
+.el-aside :deep(.el-menu-item:hover) {
+  background: rgba(255, 255, 255, 0.07) !important;
+  color: #fff !important;
+}
+.el-aside :deep(.el-menu-item.is-active) {
+  background: rgba(16, 185, 129, 0.16) !important;
+  color: var(--vte-accent-soft) !important;
+  font-weight: 600;
 }
 .el-header {
   background: var(--vte-header-bg);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-  padding: 0 16px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  padding: 0 20px;
   transition: background-color 0.3s;
+}
+.username {
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+  font-weight: 500;
 }
 .header-right {
   display: flex;

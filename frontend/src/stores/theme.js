@@ -4,7 +4,6 @@ import api from '../api'
 
 export const useThemeStore = defineStore('theme', () => {
   const theme = ref(localStorage.getItem('theme') || 'light')
-  const isLoggedIn = ref(false)
 
   // 应用主题
   function applyTheme(newTheme) {

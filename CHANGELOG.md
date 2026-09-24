@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.1.0
+
+### Frontend redesign
+
+- New warm-neutral visual theme with an emerald accent, applied through a
+  global stylesheet: Element Plus primary color and shades overridden, warm
+  off-white/gray surfaces, larger card radii, softer shadows, and unified
+  page headings.
+- Refreshed sidebar (warm gradient, brand dot, pill-style active menu item),
+  header, login page (warm emerald gradient) and statistic cards. Dark mode
+  updated to match.
+
+### Changes
+
+- Token statistics: removed the trend line chart (and the ECharts dependency
+  in the view); the page now shows the numeric overview cards and the
+  per-model table only. Server time / next-reset info moved to the footer.
+- Removed the Logs page, its navigation entry and route.
+- Fixed a memory leak on the token-stats page (a window `resize` listener was
+  never removed on unmount) and dropped some dead code.
+
+## 1.0.12
+
+### Security and robustness
+
+- Limit gateway request body size to guard against memory exhaustion from oversized payloads. The default cap is 32MB (matching the WebSocket read limit) and is configurable via `MAX_REQUEST_BODY_MB`; requests exceeding it receive HTTP 413.
+- Add graceful shutdown: the server now handles `SIGINT`/`SIGTERM` (e.g. `docker stop`), draining in-flight requests for up to 30 seconds before exiting instead of terminating abruptly.
+- Upgrade dependencies for security and maintenance: `gin` 1.9.1 → 1.10.1, `golang.org/x/net` 0.17.0 → 0.33.0, `golang.org/x/crypto` 0.18.0 → 0.31.0, `golang-jwt/jwt/v5` 5.2.0 → 5.2.1, `gorilla/websocket` 1.5.1 → 1.5.3. Go 1.21 compatibility is retained.
+
+### Configuration
+
+- `MAX_REQUEST_BODY_MB` sets the maximum accepted request body size in megabytes (default 32).
+
 ## 1.0.11
 
 ### Gateway fixes

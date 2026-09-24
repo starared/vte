@@ -24,17 +24,6 @@
       </div>
     </div>
 
-    <!-- 趋势图（以当前时间为中心，前后约 2.5 小时，每 20 分钟一个点） -->
-    <el-card class="chart-card">
-      <template #header>
-        <div class="card-header">
-          <span>Token消耗趋势</span>
-          <span class="subtitle">服务器: {{ stats.server_time || '--' }} | 下次重置: {{ stats.next_reset_time || '--' }}</span>
-        </div>
-      </template>
-      <div ref="hourlyChartRef" style="height: 300px"></div>
-    </el-card>
-
     <!-- 模型使用统计 -->
     <el-card class="table-card">
       <template #header>
@@ -66,20 +55,21 @@
     </el-card>
 
     <div class="tip">
-      统计周期：每天15:00 至 次日15:00（北京时间 UTC+8），到期自动重置
+      统计周期：每天 15:00 至 次日 15:00（北京时间 UTC+8），到期自动重置
+      <span class="tip-sep">·</span>
+      服务器时间：{{ stats.server_time || '--' }}
+      <span class="tip-sep">·</span>
+      下次重置：{{ stats.next_reset_time || '--' }}
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import * as echarts from 'echarts'
 import api from '../api'
 
 const loading = ref(false)
-const hourlyChartRef = ref(null)
-let hourlyChart = null
 let timer = null
 
 const stats = ref({
@@ -103,9 +93,6 @@ async function loadStats(showLoading = true) {
   try {
     const res = await api.get('/api/tokens/stats')
     stats.value = res.data
-    nextTick(() => {
-      renderHourlyChart()
-    })
   } catch (error) {
     console.error('加载统计失败:', error)
   } finally {
@@ -118,121 +105,6 @@ async function resetStats() {
   await api.delete('/api/tokens/stats')
   ElMessage.success('统计已重置')
   loadStats()
-}
-
-function renderHourlyChart() {
-  if (!hourlyChartRef.value) return
-  
-  if (!hourlyChart) {
-    hourlyChart = echarts.init(hourlyChartRef.value)
-  }
-
-  // 直接使用后端返回的数据（已经是以当前时间为中心的前后各8个时段）
-  const hourlyData = stats.value.hourly_stats || []
-
-  // 解析 HHMM 格式的时间，转换为显示标签
-  const times = hourlyData.map(h => {
-    const hour = Math.floor(h.hour / 100)
-    const minute = h.hour % 100
-    return `${hour}:${minute.toString().padStart(2, '0')}`
-  })
-  const tokens = hourlyData.map(h => h.total_tokens)
-  const requests = hourlyData.map(h => h.request_count)
-
-  const option = {
-    tooltip: {
-      trigger: 'axis',
-      formatter: function(params) {
-        let result = params[0].axisValue + '<br/>'
-        params.forEach(item => {
-          result += item.marker + item.seriesName + ': ' + formatNumber(item.value) + '<br/>'
-        })
-        return result
-      }
-    },
-    legend: {
-      data: ['Token数量', '请求次数'],
-      top: 10
-    },
-    grid: {
-      left: '3%',
-      right: '5%',
-      bottom: '3%',
-      containLabel: true
-    },
-    xAxis: {
-      type: 'category',
-      data: times,
-      boundaryGap: false
-    },
-    yAxis: [
-      {
-        type: 'value',
-        name: 'Token数量',
-        position: 'left',
-        axisLine: {
-          lineStyle: {
-            color: '#409EFF'
-          }
-        }
-      },
-      {
-        type: 'value',
-        name: '请求次数',
-        position: 'right',
-        axisLine: {
-          lineStyle: {
-            color: '#67C23A'
-          }
-        }
-      }
-    ],
-    series: [
-      {
-        name: 'Token数量',
-        type: 'line',
-        smooth: true,
-        yAxisIndex: 0,
-        areaStyle: {
-          color: {
-            type: 'linear',
-            x: 0,
-            y: 0,
-            x2: 0,
-            y2: 1,
-            colorStops: [
-              { offset: 0, color: 'rgba(64, 158, 255, 0.3)' },
-              { offset: 1, color: 'rgba(64, 158, 255, 0.05)' }
-            ]
-          }
-        },
-        lineStyle: {
-          color: '#409EFF',
-          width: 2
-        },
-        itemStyle: {
-          color: '#409EFF'
-        },
-        data: tokens
-      },
-      {
-        name: '请求次数',
-        type: 'line',
-        smooth: true,
-        yAxisIndex: 1,
-        lineStyle: {
-          color: '#67C23A',
-          width: 2
-        },
-        itemStyle: {
-          color: '#67C23A'
-        },
-        data: requests
-      }
-    ]
-  }
-
-  hourlyChart.setOption(option)
 }
 
 function startAutoRefresh() {
@@ -250,19 +122,10 @@ function stopAutoRefresh() {
 onMounted(() => {
   loadStats()
   startAutoRefresh()
-  
-  // 监听窗口大小变化
-  window.addEventListener('resize', () => {
-    if (hourlyChart) hourlyChart.resize()
-  })
 })
 
 onUnmounted(() => {
   stopAutoRefresh()
-  if (hourlyChart) {
-    hourlyChart.dispose()
-    hourlyChart = null
-  }
 })
 </script>
 
@@ -285,43 +148,45 @@ onUnmounted(() => {
 
 .stat-card {
   flex: 1;
-  min-width: 150px;
+  min-width: 160px;
+  position: relative;
+  overflow: hidden;
   background: var(--el-bg-color);
-  border-radius: 8px;
-  padding: 20px;
-  text-align: center;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 16px;
+  padding: 22px 24px;
+  box-shadow: 0 1px 2px rgba(41, 37, 36, 0.04), 0 8px 24px rgba(41, 37, 36, 0.05);
 }
-
-.stat-card.prompt .stat-value { color: #409EFF; }
-.stat-card.completion .stat-value { color: #67C23A; }
+/* 顶部彩条：区分总量 / 输入 / 输出 */
+.stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: var(--vte-accent-gradient);
+}
+.stat-card.prompt::before { background: linear-gradient(135deg, #38bdf8, #0ea5e9); }
+.stat-card.completion::before { background: linear-gradient(135deg, #fbbf24, #f59e0b); }
 
 .stat-value {
   font-size: 32px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--el-text-color-primary);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+  line-height: 1.1;
 }
+.stat-card.prompt .stat-value { color: #0ea5e9; }
+.stat-card.completion .stat-value { color: #f59e0b; }
 
 .stat-label {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--el-text-color-secondary);
 }
 
-.chart-card, .table-card {
+.table-card {
   margin-bottom: 20px;
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.subtitle {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  font-weight: normal;
 }
 
 .empty {
@@ -336,10 +201,13 @@ onUnmounted(() => {
   font-size: 13px;
   text-align: center;
 }
+.tip-sep { margin: 0 8px; opacity: 0.5; }
 
 @media (max-width: 768px) {
   .header h2 { font-size: 18px; }
-  .stat-card { padding: 12px; min-width: 120px; }
+  .stat-card { padding: 16px; min-width: 120px; }
   .stat-value { font-size: 24px; }
+  .tip-sep { display: none; }
+  .tip { line-height: 1.9; }
 }
 </style>
