@@ -53,26 +53,36 @@ async function handleLogin() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #34d399 0%, #0d9488 55%, #0f766e 100%);
   padding: 20px;
 }
 .login-card {
-  width: 380px;
+  width: 400px;
   max-width: 100%;
-  padding: 20px;
+  padding: 28px 24px;
+  border-radius: 20px;
+  border: none;
+  box-shadow: 0 24px 60px rgba(6, 78, 59, 0.28);
 }
 .login-card h2 {
   text-align: center;
-  margin-bottom: 8px;
-  color: #303133;
+  margin-bottom: 6px;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: 3px;
+  background: linear-gradient(135deg, #10b981, #0d9488);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 .subtitle {
   text-align: center;
   color: #909399;
-  margin-bottom: 24px;
+  margin-bottom: 28px;
+  font-size: 14px;
 }
 
 @media (max-width: 480px) {
-  .login-card { padding: 16px; }
+  .login-card { padding: 20px 16px; }
 }
 </style>
