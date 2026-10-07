@@ -20,6 +20,12 @@ var (
 
 // GetNextAPIKey 获取下一个可用的 API Key（轮询）
 func GetNextAPIKey(providerID int) (string, int, error) {
+	return GetNextAPIKeyExcluding(providerID, nil)
+}
+
+// GetNextAPIKeyExcluding 按轮询顺序获取下一个不在 exclude 中的可用密钥。
+// 用于上游拒绝某个密钥后切换到其他密钥；所有密钥都排除时返回错误。
+func GetNextAPIKeyExcluding(providerID int, exclude map[int]bool) (string, int, error) {
 	db := database.DB()
 
 	// 获取所有启用的密钥
@@ -55,17 +61,22 @@ func GetNextAPIKey(providerID int) (string, int, error) {
 		return "", 0, fmt.Errorf("no active api keys")
 	}
 
-	// 轮询选择
+	// 轮询选择（跳过已排除的密钥）
 	keyIndexMu.Lock()
+	defer keyIndexMu.Unlock()
 	idx := keyIndexMap[providerID]
 	if idx >= len(keys) {
 		idx = 0
 	}
-	selected := keys[idx]
-	keyIndexMap[providerID] = (idx + 1) % len(keys)
-	keyIndexMu.Unlock()
-
-	return selected.APIKey, selected.ID, nil
+	for i := 0; i < len(keys); i++ {
+		candidate := keys[(idx+i)%len(keys)]
+		if exclude[candidate.ID] {
+			continue
+		}
+		keyIndexMap[providerID] = (idx + i + 1) % len(keys)
+		return candidate.APIKey, candidate.ID, nil
+	}
+	return "", 0, fmt.Errorf("no other active api keys")
 }
 
 // ListAPIKeys 列出提供商的所有密钥

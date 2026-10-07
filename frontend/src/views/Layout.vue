@@ -38,7 +38,10 @@
     </el-aside>
     <el-container>
       <el-header>
-        <el-icon class="menu-toggle" @click="sidebarOpen = !sidebarOpen"><Fold /></el-icon>
+        <div class="header-left">
+          <el-icon class="menu-toggle" role="button" aria-label="打开菜单" @click="sidebarOpen = !sidebarOpen"><Fold /></el-icon>
+          <span class="page-title">{{ route.meta.title }}</span>
+        </div>
         <div class="header-right">
           <el-tooltip :content="themeTooltip" placement="bottom">
             <el-button text circle @click="themeStore.toggleTheme">
@@ -61,17 +64,22 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import {
+  DataAnalysis, Connection, Cpu, Key, TrendCharts, Setting, InfoFilled,
+  Fold, Sunny, Moon, Monitor
+} from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
 import { useThemeStore } from '../stores/theme'
+import { useIsMobile } from '../composables/useIsMobile'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 const themeStore = useThemeStore()
+const isMobile = useIsMobile()
 const sidebarOpen = ref(false)
-const isMobile = ref(false)
 
 const sidebarWidth = '220px'
 const sidebarText = '#d8d2c8'
@@ -81,10 +89,10 @@ const themeTooltip = computed(() => {
   return labels[themeStore.theme]
 })
 
-function checkMobile() {
-  isMobile.value = window.innerWidth < 768
-  if (!isMobile.value) sidebarOpen.value = false
-}
+// 切回宽屏时收起抽屉
+watch(isMobile, mobile => {
+  if (!mobile) sidebarOpen.value = false
+})
 
 function handleMenuSelect() {
   if (isMobile.value) sidebarOpen.value = false
@@ -96,13 +104,7 @@ function handleLogout() {
 }
 
 onMounted(() => {
-  checkMobile()
-  window.addEventListener('resize', checkMobile)
   themeStore.loadTheme()
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', checkMobile)
 })
 </script>
 
@@ -178,6 +180,21 @@ onUnmounted(() => {
   padding: 20px;
   transition: background-color 0.3s;
 }
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.page-title {
+  display: none;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .menu-toggle {
   display: none;
   font-size: 22px;
@@ -201,6 +218,9 @@ onUnmounted(() => {
     transform: translateX(0);
   }
   .menu-toggle {
+    display: block;
+  }
+  .page-title {
     display: block;
   }
   .mobile-overlay {

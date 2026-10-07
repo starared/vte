@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
@@ -23,7 +22,14 @@ func Init(dbPath string) error {
 	}
 
 	var err error
-	db, err = sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)")
+	// PRAGMA 写在连接串里：每次新建连接都会自动应用（连接断开重连后也不会丢失）
+	dsn := dbPath +
+		"?_pragma=journal_mode(WAL)" +
+		"&_pragma=busy_timeout(30000)" + // 等待30秒而不是立即失败
+		"&_pragma=synchronous(NORMAL)" + // 提升性能
+		"&_pragma=cache_size(10000)" + // 增加缓存
+		"&_pragma=temp_store(MEMORY)" // 临时表存内存
+	db, err = sql.Open("sqlite", dsn)
 	if err != nil {
 		return err
 	}
@@ -32,11 +38,9 @@ func Init(dbPath string) error {
 	db.SetMaxOpenConns(1) // SQLite 只支持单写入
 	db.SetMaxIdleConns(1)
 
-	// 设置 PRAGMA 优化
-	db.Exec("PRAGMA busy_timeout=30000") // 等待30秒而不是立即失败
-	db.Exec("PRAGMA synchronous=NORMAL") // 提升性能
-	db.Exec("PRAGMA cache_size=10000")   // 增加缓存
-	db.Exec("PRAGMA temp_store=MEMORY")  // 临时表存内存
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
 
 	// 创建表
 	return createTables()
@@ -61,6 +65,7 @@ func createTables() error {
 			api_key TEXT UNIQUE NOT NULL,
 			is_admin INTEGER DEFAULT 0,
 			is_active INTEGER DEFAULT 1,
+			password_changed_at INTEGER DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS providers (
@@ -85,6 +90,8 @@ func createTables() error {
 			display_name TEXT,
 			custom_name INTEGER DEFAULT 0,
 			is_active INTEGER DEFAULT 1,
+			source TEXT DEFAULT '',
+			disabled_by_sync INTEGER DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (provider_id) REFERENCES providers(id)
 		)`,
@@ -166,6 +173,12 @@ func migrateAddMissingColumns() {
 	db.Exec("ALTER TABLE temp_api_keys ADD COLUMN concurrency_limit INTEGER DEFAULT 0")
 	db.Exec("ALTER TABLE temp_api_keys ADD COLUMN expire_duration INTEGER DEFAULT 0")
 	db.Exec("ALTER TABLE temp_api_keys ADD COLUMN expire_unit TEXT DEFAULT ''")
+	// 修改密码时间（用于让旧登录令牌失效）
+	db.Exec("ALTER TABLE users ADD COLUMN password_changed_at INTEGER DEFAULT 0")
+	// 模型来源：manual（手动添加）/ fetched（从上游拉取）/ ''（旧数据，来源未知）
+	db.Exec("ALTER TABLE models ADD COLUMN source TEXT DEFAULT ''")
+	// 是否被「拉取模型」因上游下线而自动停用
+	db.Exec("ALTER TABLE models ADD COLUMN disabled_by_sync INTEGER DEFAULT 0")
 }
 
 // migrateProviderAPIKeys 将 providers 表中的 api_key 迁移到 provider_api_keys 表
@@ -181,6 +194,13 @@ func migrateProviderAPIKeys() error {
 	if _, err := db.Exec("UPDATE providers SET api_key = '' WHERE api_key != ''"); err != nil {
 		return err
 	}
+	// 清理旧版本删除提供商时遗留的密钥和模型
+	if _, err := db.Exec("DELETE FROM provider_api_keys WHERE provider_id NOT IN (SELECT id FROM providers)"); err != nil {
+		return err
+	}
+	if _, err := db.Exec("DELETE FROM models WHERE provider_id NOT IN (SELECT id FROM providers)"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -192,13 +212,12 @@ func GetOrCreateSecretKey() string {
 		return key
 	}
 
-	// 生成新的 SecretKey
+	// 生成新的 SecretKey（crypto/rand 失败时宁可退出，也不能使用可预测的密钥）
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		key = "vte-fallback-secret-" + hex.EncodeToString([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))
-	} else {
-		key = hex.EncodeToString(b)
+		log.Fatalf("生成 SecretKey 失败: %v", err)
 	}
+	key = hex.EncodeToString(b)
 
 	// 存储到数据库
 	db.Exec("INSERT INTO settings (key, value) VALUES ('secret_key', ?) ON CONFLICT(key) DO UPDATE SET value = ?", key, key)
@@ -243,8 +262,8 @@ func EnsureAdmin(username, password string) error {
 func generateAPIKey() string {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		// fallback
-		return hex.EncodeToString([]byte("fallback-api-key-" + filepath.Base(os.Args[0])))[:64]
+		// 不能退回到可预测的固定值，否则所有实例的 API Key 都一样
+		log.Fatalf("生成 API Key 失败: %v", err)
 	}
 	return hex.EncodeToString(b)
 }

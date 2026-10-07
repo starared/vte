@@ -10,7 +10,6 @@ A lightweight, self-hosted API gateway that unifies multiple AI service provider
 - 🎯 **Model Management** - Fetch models from providers and selectively enable them
 - 🔑 **Unified Entry** - One URL + API Key for all your AI services
 - 🖥️ **Web Admin Panel** - Beautiful web interface for easy management
-- 📋 **Real-time Logs** - Terminal-style logging for debugging
 - 🔄 **Stream Control** - Force streaming or non-streaming mode globally
 - 🏷️ **Model Prefixes** - Organize models by provider with custom prefixes
 - ✏️ **Model Aliases** - Custom display names for models (shows B to users, uses A internally)
@@ -155,6 +154,10 @@ cd backend
 | `SECRET_KEY` | JWT secret | Auto-generated |
 | `DATABASE_PATH` | SQLite path | `./data/gateway.db` |
 | `MAX_REQUEST_BODY_MB` | Max gateway request body size (MB) | `32` |
+| `UPSTREAM_TIMEOUT_SECONDS` | Max upstream silence (seconds): wait for response headers and the gap between streamed chunks; total duration is unlimited | `300` |
+| `TOKEN_STATS_TZ` | Time zone of the daily token-stats reset | `Asia/Shanghai` |
+| `TOKEN_STATS_RESET_HOUR` | Hour (0-23) at which token stats reset | `15` |
+| `TRUSTED_PROXIES` | Comma-separated reverse-proxy addresses/CIDRs whose `X-Forwarded-For` is trusted | `127.0.0.1,::1` |
 
 Example:
 ```bash
@@ -248,9 +251,16 @@ Add prefixes to organize models by provider:
 
 ### Model Synchronization
 Click "Fetch Models" to:
-- Add new models from provider
+- Add new models from provider (disabled by default)
 - Update model display names (if prefix changed)
-- Remove models that are no longer available
+- Remove fetched models that are no longer listed upstream
+- Keep manually added models; models you renamed (and models from before v1.2.0) are disabled instead of deleted
+
+### API Key Rotation
+Add several keys to a provider and requests are spread across them round-robin. If the upstream rejects a key with 401/403/429, the gateway immediately retries with the next key (this does not count towards "max retries").
+
+### WebSocket
+`/v1/chat/completions/ws` accepts the API key in the `Authorization` header, or — for browsers, which cannot set headers — as a subprotocol: `new WebSocket(url, ["bearer", "YOUR_API_KEY"])`. The legacy `?api_key=` query parameter still works but puts the key into access logs.
 
 ---
 
@@ -264,6 +274,20 @@ Click "Fetch Models" to:
 | `SECRET_KEY` | JWT secret key for authentication | Auto-generated |
 | `DATABASE_PATH` | SQLite database file path | `./data/gateway.db` |
 | `MAX_REQUEST_BODY_MB` | Max gateway request body size (MB) | `32` |
+| `UPSTREAM_TIMEOUT_SECONDS` | Max upstream silence (seconds): wait for response headers and the gap between streamed chunks; total duration is unlimited | `300` |
+| `TOKEN_STATS_TZ` | Time zone of the daily token-stats reset | `Asia/Shanghai` |
+| `TOKEN_STATS_RESET_HOUR` | Hour (0-23) at which token stats reset | `15` |
+| `TRUSTED_PROXIES` | Comma-separated reverse-proxy addresses/CIDRs whose `X-Forwarded-For` is trusted | `127.0.0.1,::1` |
+
+### Reverse Proxy (Nginx etc.)
+
+VTE uses the client IP for login rate limiting (10 attempts per IP per minute) and logs. Behind a reverse proxy VTE sees the proxy's address, so the proxy must be listed in `TRUSTED_PROXIES`; otherwise every visitor shares one login budget.
+
+- Nginx and VTE both on the host: the default works.
+- VTE in Docker, Nginx on the host: requests come from the Docker gateway (e.g. `172.17.0.1`, `172.18.0.1`); set `TRUSTED_PROXIES=127.0.0.1,::1,172.16.0.0/12`.
+- Nginx in Docker too: use the subnet of the network it shares with VTE.
+
+Only trust your own proxies — a trusted address can claim any client IP.
 
 ### Docker Volumes
 
@@ -342,6 +366,16 @@ vte/
 ---
 
 ## 📝 Changelog
+
+### v1.2.0
+- Gateway: rotate to the next key on upstream 401/403/429; streams are no longer cut off after 5 minutes; requests that already reached the upstream are not retried (no duplicate billing).
+- Fetch Models keeps manually added and renamed models.
+- Changing the username keeps you logged in; changing the password signs out other sessions.
+- Deleting a provider also deletes its keys; token counting works offline (no tokenizer download); stats reset time is configurable.
+- Rate-limit / concurrency settings are back in the Settings page.
+- Model display names must be unique; renames and prefix changes update temporary keys and rate-limit rules; models that went offline upstream are re-enabled when they return.
+- Editable extra request headers; 8-character minimum passwords; Docker images built with Go 1.24 / Node 22.
+- Frontend fixes (copy over HTTP, duplicate error toasts, dark mode) and a mobile-friendly layout. See [CHANGELOG.md](CHANGELOG.md).
 
 ### v1.1.0
 - New warm-neutral UI theme with an emerald accent: refreshed sidebar, header, login page, cards and dark mode.

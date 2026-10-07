@@ -2,8 +2,8 @@
   <div class="token-stats">
     <div class="header">
       <h2>Token 消耗统计</h2>
-      <div>
-        <el-button @click="loadStats" :loading="loading">刷新</el-button>
+      <div class="header-actions">
+        <el-button @click="loadStats()" :loading="loading">刷新</el-button>
         <el-button type="danger" @click="resetStats">重置今日统计</el-button>
       </div>
     </div>
@@ -29,33 +29,30 @@
       <template #header>
         <span>模型使用详情（今日）</span>
       </template>
-      <el-table :data="stats.model_stats" stripe>
+      <el-table :data="stats.model_stats || []" stripe empty-text="暂无数据">
         <el-table-column prop="model_name" label="模型名称" min-width="150" />
-        <el-table-column prop="provider_name" label="提供商" width="120" />
-        <el-table-column prop="request_count" label="请求次数" width="100" align="right" />
-        <el-table-column prop="total_tokens" label="总Token" width="120" align="right">
+        <el-table-column v-if="!isMobile" prop="provider_name" label="提供商" width="120" />
+        <el-table-column prop="request_count" :label="isMobile ? '请求' : '请求次数'" :width="isMobile ? 64 : 100" align="right" />
+        <el-table-column prop="total_tokens" label="总Token" :width="isMobile ? 100 : 120" align="right">
           <template #default="{ row }">
             {{ formatNumber(row.total_tokens) }}
           </template>
         </el-table-column>
-        <el-table-column prop="prompt_tokens" label="输入Token" width="120" align="right">
+        <el-table-column v-if="!isMobile" prop="prompt_tokens" label="输入Token" width="120" align="right">
           <template #default="{ row }">
             {{ formatNumber(row.prompt_tokens) }}
           </template>
         </el-table-column>
-        <el-table-column prop="completion_tokens" label="输出Token" width="120" align="right">
+        <el-table-column v-if="!isMobile" prop="completion_tokens" label="输出Token" width="120" align="right">
           <template #default="{ row }">
             {{ formatNumber(row.completion_tokens) }}
           </template>
         </el-table-column>
       </el-table>
-      <div v-if="!stats.model_stats || stats.model_stats.length === 0" class="empty">
-        暂无数据
-      </div>
     </el-card>
 
     <div class="tip">
-      统计周期：每天 15:00 至 次日 15:00（北京时间 UTC+8），到期自动重置
+      统计周期：每天 {{ resetLabel }} 至次日 {{ resetLabel }}（{{ stats.timezone || '北京时间 UTC+8' }}），到期自动重置
       <span class="tip-sep">·</span>
       服务器时间：{{ stats.server_time || '--' }}
       <span class="tip-sep">·</span>
@@ -65,10 +62,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import api from '../api'
+import { useIsMobile } from '../composables/useIsMobile'
+import { confirmAction, formatNumber } from '../utils'
 
+const isMobile = useIsMobile()
 const loading = ref(false)
 let timer = null
 
@@ -76,39 +76,38 @@ const stats = ref({
   total_tokens: 0,
   prompt_tokens: 0,
   completion_tokens: 0,
-  hourly_stats: [],
   model_stats: [],
   server_time: '',
   next_reset_time: '',
-  timezone: ''
+  timezone: '',
+  reset_hour: 15
 })
 
-function formatNumber(num) {
-  if (!num) return '0'
-  return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-}
+const resetLabel = computed(() => `${String(stats.value.reset_hour ?? 15).padStart(2, '0')}:00`)
 
 async function loadStats(showLoading = true) {
   if (showLoading) loading.value = true
   try {
-    const res = await api.get('/api/tokens/stats')
+    // 后台自动刷新失败时不弹提示，避免每 10 秒弹一次
+    const res = await api.get('/api/tokens/stats', { silent: !showLoading })
     stats.value = res.data
-  } catch (error) {
-    console.error('加载统计失败:', error)
+  } catch {
   } finally {
     if (showLoading) loading.value = false
   }
 }
 
 async function resetStats() {
-  await ElMessageBox.confirm('确定重置今日统计数据？', '确认')
-  await api.delete('/api/tokens/stats')
-  ElMessage.success('统计已重置')
-  loadStats()
+  if (!(await confirmAction('确定重置今日统计数据？'))) return
+  try {
+    await api.delete('/api/tokens/stats')
+    ElMessage.success('统计已重置')
+    loadStats()
+  } catch {}
 }
 
 function startAutoRefresh() {
-  if (timer) clearInterval(timer)
+  stopAutoRefresh()
   timer = setInterval(() => loadStats(false), 10000) // 每10秒刷新
 }
 
@@ -119,13 +118,25 @@ function stopAutoRefresh() {
   }
 }
 
+// 页面切到后台（锁屏、切换标签页）时暂停轮询，回来时立即刷新一次
+function handleVisibilityChange() {
+  if (document.hidden) {
+    stopAutoRefresh()
+  } else {
+    loadStats(false)
+    startAutoRefresh()
+  }
+}
+
 onMounted(() => {
   loadStats()
   startAutoRefresh()
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 })
 
 onUnmounted(() => {
   stopAutoRefresh()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>
 
@@ -137,6 +148,14 @@ onUnmounted(() => {
   margin-bottom: 16px;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+.header-actions .el-button + .el-button {
+  margin-left: 0;
 }
 
 .stats-row {
@@ -189,12 +208,6 @@ onUnmounted(() => {
   margin-bottom: 20px;
 }
 
-.empty {
-  color: var(--el-text-color-secondary);
-  text-align: center;
-  padding: 40px;
-}
-
 .tip {
   margin-top: 12px;
   color: var(--el-text-color-secondary);
@@ -205,8 +218,10 @@ onUnmounted(() => {
 
 @media (max-width: 768px) {
   .header h2 { font-size: 18px; }
-  .stat-card { padding: 16px; min-width: 120px; }
-  .stat-value { font-size: 24px; }
+  .stats-row { gap: 8px; }
+  .stat-card { padding: 14px 12px; min-width: 0; }
+  .stat-value { font-size: 18px; overflow-wrap: anywhere; }
+  .stat-label { font-size: 12px; }
   .tip-sep { display: none; }
   .tip { line-height: 1.9; }
 }

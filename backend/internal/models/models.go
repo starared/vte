@@ -10,6 +10,8 @@ type User struct {
 	IsAdmin        bool      `json:"is_admin"`
 	IsActive       bool      `json:"is_active"`
 	CreatedAt      time.Time `json:"created_at"`
+	// PasswordChangedAt 最近一次修改密码的 Unix 时间（秒），早于此时间签发的登录令牌失效
+	PasswordChangedAt int64 `json:"-"`
 }
 
 // TempAPIKey 临时 API Key，用于受限访问
@@ -43,7 +45,7 @@ type Provider struct {
 	ProviderType   string    `json:"provider_type"`
 	VertexProject  string    `json:"vertex_project,omitempty"`
 	VertexLocation string    `json:"vertex_location,omitempty"`
-	ExtraHeaders   string    `json:"-"`
+	ExtraHeaders   string    `json:"extra_headers"`
 	ProxyURL       string    `json:"proxy_url"`
 	IsActive       bool      `json:"is_active"`
 	CreatedAt      time.Time `json:"created_at"`
@@ -88,6 +90,10 @@ type Model struct {
 	DisplayName  string `json:"display_name"`
 	CustomName   bool   `json:"custom_name"`
 	IsActive     bool   `json:"is_active"`
+	// Source 模型来源：manual（手动添加）、fetched（从上游拉取）、空（1.2.0 之前的旧数据）
+	Source string `json:"source"`
+	// DisabledBySync 因上游列表不再包含而被「拉取模型」自动停用；重新出现时会自动启用
+	DisabledBySync bool `json:"disabled_by_sync"`
 }
 
 type Setting struct {
@@ -233,17 +239,10 @@ type TokenUsage struct {
 }
 
 type TokenStats struct {
-	TotalTokens      int                `json:"total_tokens"`
-	PromptTokens     int                `json:"prompt_tokens"`
-	CompletionTokens int                `json:"completion_tokens"`
-	HourlyStats      []HourlyTokenStats `json:"hourly_stats"`
-	ModelStats       []ModelTokenStats  `json:"model_stats"`
-}
-
-type HourlyTokenStats struct {
-	Hour         int `json:"hour"`
-	TotalTokens  int `json:"total_tokens"`
-	RequestCount int `json:"request_count"`
+	TotalTokens      int               `json:"total_tokens"`
+	PromptTokens     int               `json:"prompt_tokens"`
+	CompletionTokens int               `json:"completion_tokens"`
+	ModelStats       []ModelTokenStats `json:"model_stats"`
 }
 
 type ModelTokenStats struct {

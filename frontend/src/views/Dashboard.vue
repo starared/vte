@@ -3,17 +3,17 @@
     <h2>仪表盘</h2>
     
     <el-row :gutter="20" class="stats">
-      <el-col :xs="24" :sm="8">
+      <el-col :span="8">
         <el-card shadow="hover">
           <el-statistic title="提供商数量" :value="stats.providers" />
         </el-card>
       </el-col>
-      <el-col :xs="24" :sm="8">
+      <el-col :span="8">
         <el-card shadow="hover">
           <el-statistic title="已启用模型" :value="stats.activeModels" />
         </el-card>
       </el-col>
-      <el-col :xs="24" :sm="8">
+      <el-col :span="8">
         <el-card shadow="hover">
           <el-statistic title="总模型数" :value="stats.totalModels" />
         </el-card>
@@ -24,20 +24,16 @@
       <template #header>
         <span>API 接入信息</span>
       </template>
-      <el-descriptions :column="1" border>
+      <el-descriptions :column="1" border :direction="isMobile ? 'vertical' : 'horizontal'">
         <el-descriptions-item label="API 地址">
-          <el-input :value="apiUrl + '/v1'" readonly>
+          <el-input :model-value="apiUrl + '/v1'" readonly class="url-input">
             <template #append>
-              <el-button @click="copy(apiUrl + '/v1')">复制</el-button>
+              <el-button @click="copyText(apiUrl + '/v1')">复制</el-button>
             </template>
           </el-input>
         </el-descriptions-item>
         <el-descriptions-item label="API Key">
-          <div class="api-key-row">
-            <el-input :value="showApiKey ? userStore.user?.api_key : '••••••••••••••••••••••••••••••••'" readonly style="flex: 1" />
-            <el-button @click="showApiKey = !showApiKey" style="margin-left: 8px">{{ showApiKey ? '隐藏' : '显示' }}</el-button>
-            <el-button @click="copy(userStore.user?.api_key)" style="margin-left: 8px">复制</el-button>
-          </div>
+          <ApiKeyField :value="userStore.user?.api_key" />
         </el-descriptions-item>
       </el-descriptions>
       <div class="tip">
@@ -63,12 +59,14 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useUserStore } from '../stores/user'
-import { ElMessage } from 'element-plus'
+import { useIsMobile } from '../composables/useIsMobile'
+import { copyText } from '../utils'
+import ApiKeyField from '../components/ApiKeyField.vue'
 import api from '../api'
 
 const userStore = useUserStore()
+const isMobile = useIsMobile()
 const stats = ref({ providers: 0, activeModels: 0, totalModels: 0 })
-const showApiKey = ref(false)
 
 const apiUrl = computed(() => window.location.origin)
 
@@ -84,11 +82,6 @@ async function loadStats() {
   } catch {}
 }
 
-function copy(text) {
-  navigator.clipboard.writeText(text)
-  ElMessage.success('已复制')
-}
-
 onMounted(loadStats)
 </script>
 
@@ -96,7 +89,7 @@ onMounted(loadStats)
 .dashboard h2 { margin-bottom: 20px; }
 .stats { margin-bottom: 20px; }
 .api-info { margin-bottom: 20px; }
-.api-key-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.url-input { max-width: 560px; }
 .tip { margin-top: 16px; color: var(--el-text-color-secondary); font-size: 14px; }
 .code {
   background: var(--el-fill-color-light);
@@ -108,10 +101,12 @@ onMounted(loadStats)
 }
 
 @media (max-width: 768px) {
-  .stats .el-col { margin-bottom: 12px; }
-  .api-key-row { flex-direction: column; align-items: stretch; }
-  .api-key-row .el-input { width: 100% !important; }
-  .api-key-row .el-button { margin-left: 0 !important; margin-top: 8px; }
+  .stats { margin-left: -4px !important; margin-right: -4px !important; }
+  .stats .el-col { padding-left: 4px !important; padding-right: 4px !important; }
+  .stats :deep(.el-card__body) { padding: 12px; }
+  .stats :deep(.el-statistic__head) { font-size: 12px; }
+  .stats :deep(.el-statistic__content) { font-size: 22px; }
+  .url-input { max-width: none; }
   .code { font-size: 11px; padding: 12px; }
 }
 </style>

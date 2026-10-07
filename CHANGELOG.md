@@ -1,5 +1,149 @@
 # Changelog
 
+## 1.2.0
+
+### Gateway
+
+- **Key rotation**: when the upstream rejects a key with 401, 403 or 429, the
+  request is retried immediately with the next active key of the provider.
+  Rotation does not count towards "max retries"; when every key has been
+  tried the last upstream error is returned.
+- **Long streams no longer cut off**: `UPSTREAM_TIMEOUT_SECONDS` is now the
+  maximum upstream *silence* — the wait for response headers and the gap
+  between two chunks of the body — instead of an `http.Client.Timeout` on the
+  whole exchange, which cut streams longer than 5 minutes. A stream that
+  stalls for longer than the timeout is still aborted.
+- **No duplicate upstream calls**: requests are retried after network errors
+  only if they never reached the upstream (connection, DNS or proxy
+  failure). Timeouts and errors after the request was sent are returned
+  immediately instead of being retried up to four times.
+- Token statistics use the model display name for both streaming and
+  non-streaming requests (previously a model requested by its original ID
+  was recorded under two names).
+- Settings used by the gateway are read with one query per request instead
+  of about ten.
+- WebSocket: the API key can be passed as a subprotocol
+  (`new WebSocket(url, ["bearer", key])`). `?api_key=` still works.
+
+### Models and providers
+
+- Fetch Models no longer deletes manually added models, and only disables
+  (instead of deleting) renamed models and models created before 1.2.0 that
+  are missing from the upstream list. New `models.source` column.
+- Deleting a provider also deletes its API keys, in one transaction. Keys
+  and models orphaned by earlier versions are cleaned up on startup.
+
+### Accounts and security
+
+- Login tokens carry the user ID: changing the username no longer logs you
+  out. Tokens issued by earlier versions keep working.
+- Changing the password revokes every token issued before the change
+  (other devices must log in again); the current session receives a new
+  token. New `users.password_changed_at` column.
+- `/api/version/check` requires login and caches the GitHub result for an
+  hour (5 minutes after a failure).
+- `crypto/rand` failures no longer fall back to predictable API keys or JWT
+  secrets.
+
+### Operations
+
+- Token estimation uses embedded BPE files (`tiktoken-go-loader`) instead of
+  downloading them from `openaipublic.blob.core.windows.net` at runtime.
+- The token-stats reset is configurable with `TOKEN_STATS_TZ` and
+  `TOKEN_STATS_RESET_HOUR` (default Asia/Shanghai 15:00). Time zone names
+  follow daylight saving time.
+- SQLite pragmas are set in the connection string so they survive
+  reconnects; write errors in model handlers are reported instead of
+  ignored.
+- Removed the unused `/api/logs` endpoints and the `hourly_stats` field.
+- The Docker build injects the version from `VERSION`.
+
+### Model names
+
+- Display names must be unique: renaming, resetting a name, adding a model
+  and changing a provider prefix are rejected when they would duplicate
+  another model's name, and enabling a model is rejected when another
+  enabled model has the same name (previously requests then failed with
+  "ambiguous model"). Fetch Models still adds duplicates (disabled) and
+  reports how many need a prefix or alias.
+- Renaming a model, resetting its name or changing a provider prefix now
+  updates every reference in the same transaction: temporary API keys
+  (allowed models, per-model limits and usage) and custom rate-limit rules.
+  Previously those keys and rules silently stopped matching.
+- Models disabled by Fetch Models because they disappeared upstream are
+  re-enabled automatically when they reappear (`models.disabled_by_sync`);
+  models you disabled yourself stay disabled.
+- Listing models no longer rewrites every display name on each request.
+- Model lists include `source` and `disabled_by_sync`; the UI tags manual
+  models and models that went offline upstream.
+
+### Providers and accounts
+
+- Extra request headers (`extra_headers`) can be edited in the provider
+  dialog and are returned by the provider list.
+- New passwords must be at least 8 characters.
+
+### Deployment
+
+- Docker images build with Go 1.24 and Node 22 (previously Go 1.21 and
+  Node 18, both end-of-life), matching CI.
+- `TRUSTED_PROXIES` is documented, with the setting needed when VTE runs in
+  Docker behind a host reverse proxy.
+
+### Frontend: settings
+
+- Settings has an "访问限制" section again for global rate limit,
+  global concurrency limit and custom per-provider/per-model rules.
+- Token stats show the configured reset time and time zone.
+- On phones the header shows the current page title; browser tab titles
+  follow the page.
+
+### Frontend fixes
+
+- Copy buttons now work when the panel is opened over plain HTTP
+  (e.g. `http://IP:8050`): falls back to `execCommand('copy')` when the
+  Clipboard API is unavailable, and reports failure instead of always
+  showing "copied".
+- Cancelling a confirmation dialog no longer raises an unhandled promise
+  rejection.
+- Errors are shown once: the axios interceptor is the single place that
+  displays request errors; views no longer add a second toast.
+- 401 handling goes through the router and the user store (no full page
+  reload, one "session expired" message); a wrong password on the login
+  page shows the error instead of reloading the page. Transient errors when
+  loading the current user no longer log the user out.
+- Switches (model / key enable) roll back when the request fails.
+- Models: status filter works again after clearing it; page resets to 1 when
+  filters change; removed a no-op `onActivated` hook.
+- Settings: username field is filled once the user profile loads; theme
+  radio stays in sync with the header toggle; each section has its own
+  saving state; new password must be entered twice.
+- About: dark-mode colours fixed (code blocks were light-on-light); opening
+  the page no longer pops a "latest version" toast.
+- Token stats: background polling pauses while the tab is hidden and no
+  longer shows an error toast every 10 seconds when offline.
+- Theme is applied on the login page too.
+
+### Mobile
+
+- Shared `useIsMobile()` composable (reactive to resizing/rotation) replaces
+  three separate checks.
+- Providers and temporary API keys render as cards on narrow screens; the
+  provider action column is reduced to "Models / Test / More".
+- Dialogs and forms use top-aligned labels on phones; temp-key dialog is
+  fullscreen; tables hide secondary columns.
+
+### Cleanup
+
+- Removed unused `echarts` and `dayjs` dependencies (left over from the
+  removed trend chart).
+- Icons are imported per component instead of registering every Element
+  Plus icon globally.
+- New `utils/` helpers (`copyText`, `confirmAction`, `formatDateTime`,
+  `formatNumber`) and an `ApiKeyField` component shared by Dashboard and
+  Settings.
+- README no longer lists the removed real-time logs page.
+
 ## 1.1.0
 
 ### Frontend redesign

@@ -18,6 +18,8 @@ services:
       - UPSTREAM_TIMEOUT_SECONDS=${UPSTREAM_TIMEOUT_SECONDS:-300}
       - INCLUDE_STREAM_USAGE=${INCLUDE_STREAM_USAGE:-true}
       # - SECRET_KEY=your-secret-key-here
+      # 宿主机上的 Nginx 反代到本容器时，请求来自 Docker 网关，需信任该网段才能获取真实客户端 IP
+      # - TRUSTED_PROXIES=127.0.0.1,::1,172.16.0.0/12
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8050/health"]

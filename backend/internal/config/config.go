@@ -1,8 +1,6 @@
 package config
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
@@ -52,13 +50,4 @@ func getEnvInt(key string, defaultVal int) int {
 		}
 	}
 	return defaultVal
-}
-
-func generateSecretKey() string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		// fallback: 使用固定前缀 + 时间
-		return "vte-secret-key-fallback-" + hex.EncodeToString([]byte(fmt.Sprintf("%d", os.Getpid())))
-	}
-	return hex.EncodeToString(b)
 }
