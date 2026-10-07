@@ -1,6 +1,67 @@
 # Changelog
 
-## Unreleased
+## 1.2.0
+
+### Gateway
+
+- **Key rotation**: when the upstream rejects a key with 401, 403 or 429, the
+  request is retried immediately with the next active key of the provider.
+  Rotation does not count towards "max retries"; when every key has been
+  tried the last upstream error is returned.
+- **Long streams no longer cut off**: `UPSTREAM_TIMEOUT_SECONDS` now limits
+  only the wait for upstream response headers (`ResponseHeaderTimeout`).
+  Previously it was an `http.Client.Timeout`, which also covered reading the
+  body and cut streams longer than 5 minutes.
+- **No duplicate upstream calls**: requests are retried after network errors
+  only if they never reached the upstream (connection, DNS or proxy
+  failure). Timeouts and errors after the request was sent are returned
+  immediately instead of being retried up to four times.
+- Token statistics use the model display name for both streaming and
+  non-streaming requests (previously a model requested by its original ID
+  was recorded under two names).
+- Settings used by the gateway are read with one query per request instead
+  of about ten.
+- WebSocket: the API key can be passed as a subprotocol
+  (`new WebSocket(url, ["bearer", key])`). `?api_key=` still works.
+
+### Models and providers
+
+- Fetch Models no longer deletes manually added models, and only disables
+  (instead of deleting) renamed models and models created before 1.2.0 that
+  are missing from the upstream list. New `models.source` column.
+- Deleting a provider also deletes its API keys, in one transaction. Keys
+  and models orphaned by earlier versions are cleaned up on startup.
+
+### Accounts and security
+
+- Login tokens carry the user ID: changing the username no longer logs you
+  out. Tokens issued by earlier versions keep working.
+- Changing the password revokes every token issued before the change
+  (other devices must log in again); the current session receives a new
+  token. New `users.password_changed_at` column.
+- `/api/version/check` requires login and caches the GitHub result for an
+  hour (5 minutes after a failure).
+- `crypto/rand` failures no longer fall back to predictable API keys or JWT
+  secrets.
+
+### Operations
+
+- Token estimation uses embedded BPE files (`tiktoken-go-loader`) instead of
+  downloading them from `openaipublic.blob.core.windows.net` at runtime.
+- The token-stats reset is configurable with `TOKEN_STATS_TZ` and
+  `TOKEN_STATS_RESET_HOUR` (default Asia/Shanghai 15:00). Time zone names
+  follow daylight saving time.
+- SQLite pragmas are set in the connection string so they survive
+  reconnects; write errors in model handlers are reported instead of
+  ignored.
+- Removed the unused `/api/logs` endpoints and the `hourly_stats` field.
+- The Docker build injects the version from `VERSION`.
+
+### Frontend: settings
+
+- Settings has an "访问限制" section again for global rate limit,
+  global concurrency limit and custom per-provider/per-model rules.
+- Token stats show the configured reset time and time zone.
 
 ### Frontend fixes
 

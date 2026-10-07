@@ -52,7 +52,7 @@
     </el-card>
 
     <div class="tip">
-      统计周期：每天 15:00 至 次日 15:00（北京时间 UTC+8），到期自动重置
+      统计周期：每天 {{ resetLabel }} 至次日 {{ resetLabel }}（{{ stats.timezone || '北京时间 UTC+8' }}），到期自动重置
       <span class="tip-sep">·</span>
       服务器时间：{{ stats.server_time || '--' }}
       <span class="tip-sep">·</span>
@@ -62,7 +62,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
 import { useIsMobile } from '../composables/useIsMobile'
@@ -76,12 +76,14 @@ const stats = ref({
   total_tokens: 0,
   prompt_tokens: 0,
   completion_tokens: 0,
-  hourly_stats: [],
   model_stats: [],
   server_time: '',
   next_reset_time: '',
-  timezone: ''
+  timezone: '',
+  reset_hour: 15
 })
+
+const resetLabel = computed(() => `${String(stats.value.reset_hour ?? 15).padStart(2, '0')}:00`)
 
 async function loadStats(showLoading = true) {
   if (showLoading) loading.value = true

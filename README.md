@@ -154,6 +154,9 @@ cd backend
 | `SECRET_KEY` | JWT secret | Auto-generated |
 | `DATABASE_PATH` | SQLite path | `./data/gateway.db` |
 | `MAX_REQUEST_BODY_MB` | Max gateway request body size (MB) | `32` |
+| `UPSTREAM_TIMEOUT_SECONDS` | Max wait for the upstream response headers (seconds); streaming bodies are not cut off | `300` |
+| `TOKEN_STATS_TZ` | Time zone of the daily token-stats reset | `Asia/Shanghai` |
+| `TOKEN_STATS_RESET_HOUR` | Hour (0-23) at which token stats reset | `15` |
 
 Example:
 ```bash
@@ -247,9 +250,16 @@ Add prefixes to organize models by provider:
 
 ### Model Synchronization
 Click "Fetch Models" to:
-- Add new models from provider
+- Add new models from provider (disabled by default)
 - Update model display names (if prefix changed)
-- Remove models that are no longer available
+- Remove fetched models that are no longer listed upstream
+- Keep manually added models; models you renamed (and models from before v1.2.0) are disabled instead of deleted
+
+### API Key Rotation
+Add several keys to a provider and requests are spread across them round-robin. If the upstream rejects a key with 401/403/429, the gateway immediately retries with the next key (this does not count towards "max retries").
+
+### WebSocket
+`/v1/chat/completions/ws` accepts the API key in the `Authorization` header, or — for browsers, which cannot set headers — as a subprotocol: `new WebSocket(url, ["bearer", "YOUR_API_KEY"])`. The legacy `?api_key=` query parameter still works but puts the key into access logs.
 
 ---
 
@@ -263,6 +273,9 @@ Click "Fetch Models" to:
 | `SECRET_KEY` | JWT secret key for authentication | Auto-generated |
 | `DATABASE_PATH` | SQLite database file path | `./data/gateway.db` |
 | `MAX_REQUEST_BODY_MB` | Max gateway request body size (MB) | `32` |
+| `UPSTREAM_TIMEOUT_SECONDS` | Max wait for the upstream response headers (seconds); streaming bodies are not cut off | `300` |
+| `TOKEN_STATS_TZ` | Time zone of the daily token-stats reset | `Asia/Shanghai` |
+| `TOKEN_STATS_RESET_HOUR` | Hour (0-23) at which token stats reset | `15` |
 
 ### Docker Volumes
 
@@ -341,6 +354,14 @@ vte/
 ---
 
 ## 📝 Changelog
+
+### v1.2.0
+- Gateway: rotate to the next key on upstream 401/403/429; streams are no longer cut off after 5 minutes; requests that already reached the upstream are not retried (no duplicate billing).
+- Fetch Models keeps manually added and renamed models.
+- Changing the username keeps you logged in; changing the password signs out other sessions.
+- Deleting a provider also deletes its keys; token counting works offline (no tokenizer download); stats reset time is configurable.
+- Rate-limit / concurrency settings are back in the Settings page.
+- Frontend fixes (copy over HTTP, duplicate error toasts, dark mode) and a mobile-friendly layout. See [CHANGELOG.md](CHANGELOG.md).
 
 ### v1.1.0
 - New warm-neutral UI theme with an emerald accent: refreshed sidebar, header, login page, cards and dark mode.

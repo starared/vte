@@ -16,7 +16,7 @@
       show-icon
       :closable="false"
       class="tip"
-      title="为外部或短期使用生成受限的 API Key，可指定可用模型、各自次数、总次数、有效期、速率限制和并发限制。"
+      title="为外部或短期使用生成受限的 API Key，可指定可用模型、各自次数、总次数、有效期、速率限制和并发限制。请求转发到上游后即计入次数，上游返回错误也会计数。"
     />
 
     <el-table v-if="!isMobile" :data="keys" v-loading="loading" border style="width: 100%" size="small">

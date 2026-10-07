@@ -10,6 +10,8 @@ type User struct {
 	IsAdmin        bool      `json:"is_admin"`
 	IsActive       bool      `json:"is_active"`
 	CreatedAt      time.Time `json:"created_at"`
+	// PasswordChangedAt 最近一次修改密码的 Unix 时间（秒），早于此时间签发的登录令牌失效
+	PasswordChangedAt int64 `json:"-"`
 }
 
 // TempAPIKey 临时 API Key，用于受限访问
@@ -233,17 +235,10 @@ type TokenUsage struct {
 }
 
 type TokenStats struct {
-	TotalTokens      int                `json:"total_tokens"`
-	PromptTokens     int                `json:"prompt_tokens"`
-	CompletionTokens int                `json:"completion_tokens"`
-	HourlyStats      []HourlyTokenStats `json:"hourly_stats"`
-	ModelStats       []ModelTokenStats  `json:"model_stats"`
-}
-
-type HourlyTokenStats struct {
-	Hour         int `json:"hour"`
-	TotalTokens  int `json:"total_tokens"`
-	RequestCount int `json:"request_count"`
+	TotalTokens      int               `json:"total_tokens"`
+	PromptTokens     int               `json:"prompt_tokens"`
+	CompletionTokens int               `json:"completion_tokens"`
+	ModelStats       []ModelTokenStats `json:"model_stats"`
 }
 
 type ModelTokenStats struct {

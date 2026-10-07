@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,7 +38,7 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	token, err := auth.GenerateToken(user.Username)
+	token, err := auth.GenerateToken(user)
 	if err != nil {
 		c.JSON(500, gin.H{"detail": "生成令牌失败"})
 		return
@@ -81,15 +82,25 @@ func ChangePassword(c *gin.Context) {
 		return
 	}
 
+	// 记录修改时间：早于该时间签发的令牌（包括其他设备上的登录）全部失效
+	changedAt := time.Now().Unix()
 	db := database.DB()
-	_, err = db.Exec("UPDATE users SET hashed_password = ? WHERE id = ?", hashed, user.ID)
+	_, err = db.Exec("UPDATE users SET hashed_password = ?, password_changed_at = ? WHERE id = ?", hashed, changedAt, user.ID)
 	if err != nil {
 		c.JSON(500, gin.H{"detail": "更新失败"})
 		return
 	}
+	user.PasswordChangedAt = changedAt
+
+	// 给当前会话签发新令牌，避免修改密码后自己也被登出
+	token, err := auth.GenerateToken(user)
+	if err != nil {
+		c.JSON(500, gin.H{"detail": "生成令牌失败"})
+		return
+	}
 
 	logger.Info(fmt.Sprintf("%s | 修改密码 | %s", c.ClientIP(), user.Username))
-	c.JSON(200, gin.H{"message": "密码修改成功"})
+	c.JSON(200, gin.H{"message": "密码修改成功", "access_token": token, "token_type": "bearer"})
 }
 
 func ChangeUsername(c *gin.Context) {
@@ -99,12 +110,21 @@ func ChangeUsername(c *gin.Context) {
 		return
 	}
 
+	req.NewUsername = strings.TrimSpace(req.NewUsername)
+	if req.NewUsername == "" {
+		c.JSON(400, gin.H{"detail": "用户名不能为空"})
+		return
+	}
+
 	user := c.MustGet("user").(*models.User)
 	db := database.DB()
 
 	// 检查用户名是否已存在
 	var count int
-	db.QueryRow("SELECT COUNT(*) FROM users WHERE username = ? AND id != ?", req.NewUsername, user.ID).Scan(&count)
+	if err := db.QueryRow("SELECT COUNT(*) FROM users WHERE username = ? AND id != ?", req.NewUsername, user.ID).Scan(&count); err != nil {
+		c.JSON(500, gin.H{"detail": "查询失败"})
+		return
+	}
 	if count > 0 {
 		c.JSON(400, gin.H{"detail": "用户名已存在"})
 		return
@@ -125,8 +145,12 @@ func RegenerateAPIKey(c *gin.Context) {
 	user := c.MustGet("user").(*models.User)
 	db := database.DB()
 
-	newKey := auth.GenerateAPIKey()
-	_, err := db.Exec("UPDATE users SET api_key = ? WHERE id = ?", newKey, user.ID)
+	newKey, err := auth.GenerateAPIKey()
+	if err != nil {
+		c.JSON(500, gin.H{"detail": "生成密钥失败"})
+		return
+	}
+	_, err = db.Exec("UPDATE users SET api_key = ? WHERE id = ?", newKey, user.ID)
 	if err != nil {
 		c.JSON(500, gin.H{"detail": "更新失败"})
 		return

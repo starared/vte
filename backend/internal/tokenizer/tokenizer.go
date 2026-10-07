@@ -6,7 +6,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/pkoukk/tiktoken-go"
+	tiktoken_loader "github.com/pkoukk/tiktoken-go-loader"
 )
+
+func init() {
+	// 使用内置词表，不在运行时从 openaipublic.blob.core.windows.net 下载
+	// （国内网络下该下载可能很慢或失败，并会阻塞 token 估算）
+	tiktoken.SetBpeLoader(tiktoken_loader.NewOfflineLoader())
+}
 
 var (
 	encoderCache = make(map[string]*tiktoken.Tiktoken)

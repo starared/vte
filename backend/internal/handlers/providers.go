@@ -274,8 +274,27 @@ func DeleteProvider(c *gin.Context) {
 		return
 	}
 
-	db.Exec("DELETE FROM models WHERE provider_id = ?", id)
-	db.Exec("DELETE FROM providers WHERE id = ?", id)
+	// 在同一个事务里删除提供商及其模型、密钥，避免留下孤立的密钥记录
+	tx, err := db.Begin()
+	if err != nil {
+		c.JSON(500, gin.H{"detail": "删除失败"})
+		return
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		"DELETE FROM provider_api_keys WHERE provider_id = ?",
+		"DELETE FROM models WHERE provider_id = ?",
+		"DELETE FROM providers WHERE id = ?",
+	} {
+		if _, err := tx.Exec(q, id); err != nil {
+			c.JSON(500, gin.H{"detail": "删除失败"})
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		c.JSON(500, gin.H{"detail": "删除失败"})
+		return
+	}
 
 	proxy.InvalidateClient(proxyURL)
 
@@ -318,7 +337,9 @@ func FetchModels(c *gin.Context) {
 	}
 
 	if extraHeaders != nil && *extraHeaders != "" {
-		json.Unmarshal([]byte(*extraHeaders), &cfg.ExtraHeaders)
+		if err := json.Unmarshal([]byte(*extraHeaders), &cfg.ExtraHeaders); err != nil {
+			logger.Warn(fmt.Sprintf("提供商 %s 的额外请求头格式错误，已忽略", name))
+		}
 	}
 
 	modelsData, err := cfg.ListModels(c.Request.Context())
@@ -332,58 +353,13 @@ func FetchModels(c *gin.Context) {
 		c.JSON(409, gin.H{"detail": "上游返回空模型列表；已保留现有模型，请手动确认后删除"})
 		return
 	}
-	// 获取现有模型
-	existingModels := make(map[string]int)
-	customNameModels := make(map[string]bool) // 标记哪些模型有自定义名称
-	rows, _ := db.Query("SELECT id, original_id, COALESCE(custom_name, 0) FROM models WHERE provider_id = ?", id)
-	for rows.Next() {
-		var modelID int
-		var originalID string
-		var customName int
-		rows.Scan(&modelID, &originalID, &customName)
-		existingModels[originalID] = modelID
-		customNameModels[originalID] = customName == 1
+	result, err := syncFetchedModels(id, modelPrefix, modelsData)
+	if err != nil {
+		logger.Error(fmt.Sprintf("%s | 同步模型失败 | %s | %v", c.ClientIP(), name, err))
+		c.JSON(500, gin.H{"detail": "保存模型列表失败"})
+		return
 	}
-	rows.Close()
-
-	fetchedIDs := make(map[string]bool)
-	added, updated, deleted := 0, 0, 0
-
-	for _, m := range modelsData {
-		modelID, ok := m["id"].(string)
-		if !ok || modelID == "" {
-			continue
-		}
-		fetchedIDs[modelID] = true
-
-		displayName := modelID
-		if modelPrefix != "" {
-			displayName = modelPrefix + "/" + modelID
-		}
-
-		if existingID, exists := existingModels[modelID]; exists {
-			// 更新：只有非自定义名称的模型才更新 display_name
-			if !customNameModels[modelID] {
-				db.Exec("UPDATE models SET display_name = ? WHERE id = ?", displayName, existingID)
-			}
-			updated++
-		} else {
-			// 新增
-			db.Exec(`
-				INSERT INTO models (provider_id, original_id, display_name, custom_name, is_active) 
-				VALUES (?, ?, ?, 0, 0)
-			`, id, modelID, displayName)
-			added++
-		}
-	}
-
-	// 删除已下线的模型
-	for originalID, modelID := range existingModels {
-		if !fetchedIDs[originalID] {
-			db.Exec("DELETE FROM models WHERE id = ?", modelID)
-			deleted++
-		}
-	}
+	added, updated, deleted, disabled := result.added, result.updated, result.deleted, result.disabled
 
 	var messages []string
 	if added > 0 {
@@ -394,6 +370,9 @@ func FetchModels(c *gin.Context) {
 	}
 	if deleted > 0 {
 		messages = append(messages, fmt.Sprintf("删除 %d 个已下线模型", deleted))
+	}
+	if disabled > 0 {
+		messages = append(messages, fmt.Sprintf("停用 %d 个上游未列出的模型（已保留，可手动删除）", disabled))
 	}
 	if len(messages) == 0 {
 		messages = append(messages, "没有变化")
@@ -425,9 +404,18 @@ func AddModel(c *gin.Context) {
 		return
 	}
 
+	req.ModelID = strings.TrimSpace(req.ModelID)
+	if req.ModelID == "" {
+		c.JSON(400, gin.H{"detail": "模型 ID 不能为空"})
+		return
+	}
+
 	// 检查是否已存在
 	var count int
-	db.QueryRow("SELECT COUNT(*) FROM models WHERE provider_id = ? AND original_id = ?", id, req.ModelID).Scan(&count)
+	if err := db.QueryRow("SELECT COUNT(*) FROM models WHERE provider_id = ? AND original_id = ?", id, req.ModelID).Scan(&count); err != nil {
+		c.JSON(500, gin.H{"detail": "查询失败"})
+		return
+	}
 	if count > 0 {
 		c.JSON(400, gin.H{"detail": "模型已存在"})
 		return
@@ -439,8 +427,8 @@ func AddModel(c *gin.Context) {
 	}
 
 	_, err = db.Exec(`
-		INSERT INTO models (provider_id, original_id, display_name, custom_name, is_active) 
-		VALUES (?, ?, ?, 0, 1)
+		INSERT INTO models (provider_id, original_id, display_name, custom_name, is_active, source) 
+		VALUES (?, ?, ?, 0, 1, 'manual')
 	`, id, req.ModelID, displayName)
 	if err != nil {
 		c.JSON(500, gin.H{"detail": "添加失败"})
@@ -476,7 +464,10 @@ func ListProviderModels(c *gin.Context) {
 		var m models.Model
 		var isActive, customName int
 		var displayName *string
-		rows.Scan(&m.ID, &m.ProviderID, &m.ProviderName, &m.OriginalID, &displayName, &isActive, &customName)
+		if err := rows.Scan(&m.ID, &m.ProviderID, &m.ProviderName, &m.OriginalID, &displayName, &isActive, &customName); err != nil {
+			c.JSON(500, gin.H{"detail": "查询失败"})
+			return
+		}
 		m.IsActive = isActive == 1
 		m.CustomName = customName == 1
 		if displayName != nil {
@@ -522,4 +513,113 @@ func validateProvider(kind, base, project, headers, proxyAddress string) error {
 		}
 	}
 	return nil
+}
+
+type modelSyncResult struct {
+	added, updated, deleted, disabled int
+}
+
+// syncFetchedModels 用上游返回的模型列表更新本地模型（在一个事务内完成）。
+//
+// 上游列表里没有的本地模型：
+//   - 手动添加的（source=manual）：保留不动，上游 /models 不列出的模型常常仍可调用
+//   - 改过显示名称的、或来源未知的旧数据：停用但保留，避免丢失别名配置
+//   - 其余从上游拉取的：删除
+func syncFetchedModels(providerID int, modelPrefix string, modelsData []map[string]interface{}) (modelSyncResult, error) {
+	var res modelSyncResult
+	tx, err := database.DB().Begin()
+	if err != nil {
+		return res, err
+	}
+	defer tx.Rollback()
+
+	type existing struct {
+		id         int
+		customName bool
+		source     string
+		active     bool
+	}
+	current := make(map[string]existing)
+	rows, err := tx.Query("SELECT id, original_id, COALESCE(custom_name, 0), COALESCE(source, ''), is_active FROM models WHERE provider_id = ?", providerID)
+	if err != nil {
+		return res, err
+	}
+	for rows.Next() {
+		var e existing
+		var originalID string
+		var customName, active int
+		if err := rows.Scan(&e.id, &originalID, &customName, &e.source, &active); err != nil {
+			rows.Close()
+			return res, err
+		}
+		e.customName = customName == 1
+		e.active = active == 1
+		current[originalID] = e
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return res, err
+	}
+
+	fetched := make(map[string]bool)
+	for _, m := range modelsData {
+		modelID, ok := m["id"].(string)
+		if !ok || modelID == "" || fetched[modelID] {
+			continue
+		}
+		fetched[modelID] = true
+
+		displayName := modelID
+		if modelPrefix != "" {
+			displayName = modelPrefix + "/" + modelID
+		}
+
+		if e, exists := current[modelID]; exists {
+			source := e.source
+			if source != "manual" {
+				source = "fetched"
+			}
+			if e.customName {
+				_, err = tx.Exec("UPDATE models SET source = ? WHERE id = ?", source, e.id)
+			} else {
+				_, err = tx.Exec("UPDATE models SET display_name = ?, source = ? WHERE id = ?", displayName, source, e.id)
+			}
+			if err != nil {
+				return res, err
+			}
+			res.updated++
+			continue
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO models (provider_id, original_id, display_name, custom_name, is_active, source)
+			VALUES (?, ?, ?, 0, 0, 'fetched')
+		`, providerID, modelID, displayName); err != nil {
+			return res, err
+		}
+		res.added++
+	}
+
+	for originalID, e := range current {
+		if fetched[originalID] {
+			continue
+		}
+		switch {
+		case e.source == "manual":
+			// 保留
+		case e.customName || e.source == "":
+			if e.active {
+				if _, err := tx.Exec("UPDATE models SET is_active = 0 WHERE id = ?", e.id); err != nil {
+					return res, err
+				}
+				res.disabled++
+			}
+		default:
+			if _, err := tx.Exec("DELETE FROM models WHERE id = ?", e.id); err != nil {
+				return res, err
+			}
+			res.deleted++
+		}
+	}
+
+	return res, tx.Commit()
 }

@@ -41,7 +41,10 @@ func ListAllModels(c *gin.Context) {
 		var m models.Model
 		var isActive, customName int
 		var displayName *string
-		rows.Scan(&m.ID, &m.ProviderID, &m.ProviderName, &m.OriginalID, &displayName, &isActive, &customName)
+		if err := rows.Scan(&m.ID, &m.ProviderID, &m.ProviderName, &m.OriginalID, &displayName, &isActive, &customName); err != nil {
+			c.JSON(500, gin.H{"detail": "查询失败"})
+			return
+		}
 		m.IsActive = isActive == 1
 		m.CustomName = customName == 1
 		if displayName != nil {
@@ -80,7 +83,10 @@ func UpdateModel(c *gin.Context) {
 		newDisplayName := *req.DisplayName
 		if newDisplayName != "" {
 			// 设置自定义名称
-			db.Exec("UPDATE models SET display_name = ?, custom_name = 1 WHERE id = ?", newDisplayName, id)
+			if _, err := db.Exec("UPDATE models SET display_name = ?, custom_name = 1 WHERE id = ?", newDisplayName, id); err != nil {
+				c.JSON(500, gin.H{"detail": "更新失败"})
+				return
+			}
 			logger.Info(fmt.Sprintf("%s | 修改模型名称 | %s -> %s", c.ClientIP(), displayName, newDisplayName))
 		}
 	}
@@ -91,7 +97,10 @@ func UpdateModel(c *gin.Context) {
 		if *req.IsActive {
 			active = 1
 		}
-		db.Exec("UPDATE models SET is_active = ? WHERE id = ?", active, id)
+		if _, err := db.Exec("UPDATE models SET is_active = ? WHERE id = ?", active, id); err != nil {
+			c.JSON(500, gin.H{"detail": "更新失败"})
+			return
+		}
 
 		status := "禁用"
 		if *req.IsActive {
@@ -133,7 +142,10 @@ func ResetModelDisplayName(c *gin.Context) {
 	}
 
 	// 重置为自动生成的名称
-	db.Exec("UPDATE models SET display_name = ?, custom_name = 0 WHERE id = ?", autoDisplayName, id)
+	if _, err := db.Exec("UPDATE models SET display_name = ?, custom_name = 0 WHERE id = ?", autoDisplayName, id); err != nil {
+		c.JSON(500, gin.H{"detail": "重置失败"})
+		return
+	}
 
 	logger.Info(fmt.Sprintf("%s | 重置模型名称 | %s", c.ClientIP(), autoDisplayName))
 	c.JSON(200, gin.H{"message": "重置成功", "display_name": autoDisplayName})
@@ -154,7 +166,10 @@ func DeleteModel(c *gin.Context) {
 		return
 	}
 
-	db.Exec("DELETE FROM models WHERE id = ?", id)
+	if _, err := db.Exec("DELETE FROM models WHERE id = ?", id); err != nil {
+		c.JSON(500, gin.H{"detail": "删除失败"})
+		return
+	}
 
 	logger.Info(fmt.Sprintf("%s | 删除模型 | %s", c.ClientIP(), displayName))
 	c.JSON(200, gin.H{"message": "删除成功"})
@@ -189,7 +204,10 @@ func BatchToggleModels(c *gin.Context) {
 	}
 
 	query := fmt.Sprintf("UPDATE models SET is_active = ? WHERE id IN (%s)", strings.Join(placeholders, ","))
-	db.Exec(query, args...)
+	if _, err := db.Exec(query, args...); err != nil {
+		c.JSON(500, gin.H{"detail": "更新失败"})
+		return
+	}
 
 	status := "禁用"
 	if req.IsActive {
