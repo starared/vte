@@ -154,7 +154,7 @@ cd backend
 | `SECRET_KEY` | JWT secret | Auto-generated |
 | `DATABASE_PATH` | SQLite path | `./data/gateway.db` |
 | `MAX_REQUEST_BODY_MB` | Max gateway request body size (MB) | `32` |
-| `UPSTREAM_TIMEOUT_SECONDS` | Max wait for the upstream response headers (seconds); streaming bodies are not cut off | `300` |
+| `UPSTREAM_TIMEOUT_SECONDS` | Max upstream silence (seconds): wait for response headers and the gap between streamed chunks; total duration is unlimited | `300` |
 | `TOKEN_STATS_TZ` | Time zone of the daily token-stats reset | `Asia/Shanghai` |
 | `TOKEN_STATS_RESET_HOUR` | Hour (0-23) at which token stats reset | `15` |
 
@@ -273,7 +273,7 @@ Add several keys to a provider and requests are spread across them round-robin. 
 | `SECRET_KEY` | JWT secret key for authentication | Auto-generated |
 | `DATABASE_PATH` | SQLite database file path | `./data/gateway.db` |
 | `MAX_REQUEST_BODY_MB` | Max gateway request body size (MB) | `32` |
-| `UPSTREAM_TIMEOUT_SECONDS` | Max wait for the upstream response headers (seconds); streaming bodies are not cut off | `300` |
+| `UPSTREAM_TIMEOUT_SECONDS` | Max upstream silence (seconds): wait for response headers and the gap between streamed chunks; total duration is unlimited | `300` |
 | `TOKEN_STATS_TZ` | Time zone of the daily token-stats reset | `Asia/Shanghai` |
 | `TOKEN_STATS_RESET_HOUR` | Hour (0-23) at which token stats reset | `15` |
 

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -53,9 +54,10 @@ func getClient(proxyURL string) *http.Client {
 		return client
 	}
 
-	// 注意：不设置 http.Client.Timeout。它会把读取响应体的时间也算进去，
-	// 导致超过时限的长流式输出被强行切断。这里只限制「连上并等到响应头」的时间，
-	// 响应体的读取由客户端请求的 context 控制（客户端断开即停止）。
+	// 注意：不设置 http.Client.Timeout。它会把读取响应体的总时间也算进去，
+	// 导致超过时限的长流式输出被强行切断。UPSTREAM_TIMEOUT_SECONDS 现在表示
+	// 「上游最长可以多久没有动静」：等待响应头的时间，以及读取响应体时两次数据之间的间隔
+	// （见 idleTimeoutBody）。
 	transport := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,
@@ -255,12 +257,15 @@ func (cfg *ProviderConfig) doWithRetry(ctx context.Context, payload map[string]i
 			}
 		}
 
-		var wrote bool
+		// WroteRequest 在 Transport 的写协程里回调，用原子变量避免数据竞争
+		var wrote atomic.Bool
 		trace := &httptrace.ClientTrace{
-			WroteRequest: func(httptrace.WroteRequestInfo) { wrote = true },
+			WroteRequest: func(httptrace.WroteRequestInfo) { wrote.Store(true) },
 		}
-		req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), "POST", chatURL, bytes.NewReader(body))
+		attemptCtx, cancelAttempt := context.WithCancel(ctx)
+		req, err := http.NewRequestWithContext(httptrace.WithClientTrace(attemptCtx, trace), "POST", chatURL, bytes.NewReader(body))
 		if err != nil {
+			cancelAttempt()
 			return nil, err
 		}
 
@@ -277,6 +282,7 @@ func (cfg *ProviderConfig) doWithRetry(ctx context.Context, payload map[string]i
 		}
 		resp, err := client.Do(req)
 		if err != nil {
+			cancelAttempt()
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
@@ -285,7 +291,7 @@ func (cfg *ProviderConfig) doWithRetry(ctx context.Context, payload map[string]i
 			} else {
 				lastErr = errors.New("upstream network request failed")
 			}
-			if wrote {
+			if wrote.Load() {
 				// 请求已经发到上游，无法确定上游是否已处理，不能重试
 				return nil, lastErr
 			}
@@ -293,11 +299,14 @@ func (cfg *ProviderConfig) doWithRetry(ctx context.Context, payload map[string]i
 		}
 
 		if resp.StatusCode == http.StatusOK {
+			// 响应体读取期间如果上游长时间没有任何数据，就断开（防止请求永久挂起）
+			resp.Body = newIdleTimeoutBody(resp.Body, upstreamTimeout(), cancelAttempt)
 			return resp, nil
 		}
 
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
+		cancelAttempt()
 		lastErr = &UpstreamError{Status: resp.StatusCode, Body: respBody, RetryAfter: resp.Header.Get("Retry-After")}
 
 		if shouldRotateKey(resp.StatusCode) && cfg.RotateKey != nil && cfg.RotateKey() {
@@ -313,6 +322,46 @@ func (cfg *ProviderConfig) doWithRetry(ctx context.Context, payload map[string]i
 		lastErr = errors.New("upstream request failed")
 	}
 	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+// ErrUpstreamIdle 上游在超时时间内没有发送任何数据
+var ErrUpstreamIdle = fmt.Errorf("upstream idle timeout: %w", context.DeadlineExceeded)
+
+// idleTimeoutBody 每读到数据就重置计时器；超过 timeout 没有新数据则取消请求，
+// 之后的 Read 返回 ErrUpstreamIdle。
+type idleTimeoutBody struct {
+	io.ReadCloser
+	timeout  time.Duration
+	timer    *time.Timer
+	timedOut atomic.Bool
+	cancel   context.CancelFunc
+}
+
+func newIdleTimeoutBody(body io.ReadCloser, timeout time.Duration, cancel context.CancelFunc) *idleTimeoutBody {
+	b := &idleTimeoutBody{ReadCloser: body, timeout: timeout, cancel: cancel}
+	b.timer = time.AfterFunc(timeout, func() {
+		b.timedOut.Store(true)
+		cancel()
+	})
+	return b
+}
+
+func (b *idleTimeoutBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 && !b.timedOut.Load() {
+		b.timer.Reset(b.timeout)
+	}
+	if err != nil && err != io.EOF && b.timedOut.Load() {
+		return n, ErrUpstreamIdle
+	}
+	return n, err
+}
+
+func (b *idleTimeoutBody) Close() error {
+	b.timer.Stop()
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
 }
 
 func isTimeout(err error) bool {

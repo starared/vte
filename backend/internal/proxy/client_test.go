@@ -248,3 +248,32 @@ func TestConnectFailureIsRetried(t *testing.T) {
 		t.Fatalf("expected 3 attempts, got %d", attempts)
 	}
 }
+
+// 上游发了响应头之后长时间没有任何数据，应该断开而不是永久挂起
+func TestStalledStreamTimesOut(t *testing.T) {
+	withHeaderTimeout(t, "1")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[]}\n\n")
+		w.(http.Flusher).Flush()
+		select {
+		case <-time.After(5 * time.Second):
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	cfg := ProviderConfig{BaseURL: server.URL}
+	resp, err := cfg.ChatCompletionStreamWithRetry(context.Background(), map[string]interface{}{"stream": true}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	start := time.Now()
+	err = ReadEvents(resp.Body, func(string) error { return nil })
+	if !errors.Is(err, ErrUpstreamIdle) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected idle timeout, got %v", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("took %v", d)
+	}
+}

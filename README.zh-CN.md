@@ -241,7 +241,7 @@ print(response.choices[0].message.content)
 | `SECRET_KEY` | JWT 认证密钥 | 自动生成 |
 | `DATABASE_PATH` | SQLite 数据库文件路径 | `./data/gateway.db` |
 | `MAX_REQUEST_BODY_MB` | 网关请求体大小上限（MB） | `32` |
-| `UPSTREAM_TIMEOUT_SECONDS` | 等待上游响应头的最长时间（秒）；流式输出本身不受此限制 | `300` |
+| `UPSTREAM_TIMEOUT_SECONDS` | 上游最长无响应时间（秒）：等待响应头、以及流式输出中两段数据之间的间隔；输出总时长不受限制 | `300` |
 | `TOKEN_STATS_TZ` | Token 统计每日重置所用时区 | `Asia/Shanghai` |
 | `TOKEN_STATS_RESET_HOUR` | Token 统计每日重置的整点（0-23） | `15` |
 
