@@ -58,11 +58,45 @@
 - Removed the unused `/api/logs` endpoints and the `hourly_stats` field.
 - The Docker build injects the version from `VERSION`.
 
+### Model names
+
+- Display names must be unique: renaming, resetting a name, adding a model
+  and changing a provider prefix are rejected when they would duplicate
+  another model's name, and enabling a model is rejected when another
+  enabled model has the same name (previously requests then failed with
+  "ambiguous model"). Fetch Models still adds duplicates (disabled) and
+  reports how many need a prefix or alias.
+- Renaming a model, resetting its name or changing a provider prefix now
+  updates every reference in the same transaction: temporary API keys
+  (allowed models, per-model limits and usage) and custom rate-limit rules.
+  Previously those keys and rules silently stopped matching.
+- Models disabled by Fetch Models because they disappeared upstream are
+  re-enabled automatically when they reappear (`models.disabled_by_sync`);
+  models you disabled yourself stay disabled.
+- Listing models no longer rewrites every display name on each request.
+- Model lists include `source` and `disabled_by_sync`; the UI tags manual
+  models and models that went offline upstream.
+
+### Providers and accounts
+
+- Extra request headers (`extra_headers`) can be edited in the provider
+  dialog and are returned by the provider list.
+- New passwords must be at least 8 characters.
+
+### Deployment
+
+- Docker images build with Go 1.24 and Node 22 (previously Go 1.21 and
+  Node 18, both end-of-life), matching CI.
+- `TRUSTED_PROXIES` is documented, with the setting needed when VTE runs in
+  Docker behind a host reverse proxy.
+
 ### Frontend: settings
 
 - Settings has an "访问限制" section again for global rate limit,
   global concurrency limit and custom per-provider/per-model rules.
 - Token stats show the configured reset time and time zone.
+- On phones the header shows the current page title; browser tab titles
+  follow the page.
 
 ### Frontend fixes
 

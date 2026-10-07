@@ -1,3 +1,6 @@
+# If VTE runs in Docker (e.g. docker-compose) behind this host Nginx, set
+# TRUSTED_PROXIES=127.0.0.1,::1,172.16.0.0/12 for VTE so X-Forwarded-For is
+# trusted and login rate limiting / logs see the real client IP.
 # Place inside the existing HTTPS server block managed by Certbot.
 # Change proxy_pass if you publish VTE on a different local port.
 location / {

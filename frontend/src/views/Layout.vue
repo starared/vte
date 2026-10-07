@@ -38,7 +38,10 @@
     </el-aside>
     <el-container>
       <el-header>
-        <el-icon class="menu-toggle" @click="sidebarOpen = !sidebarOpen"><Fold /></el-icon>
+        <div class="header-left">
+          <el-icon class="menu-toggle" role="button" aria-label="打开菜单" @click="sidebarOpen = !sidebarOpen"><Fold /></el-icon>
+          <span class="page-title">{{ route.meta.title }}</span>
+        </div>
         <div class="header-right">
           <el-tooltip :content="themeTooltip" placement="bottom">
             <el-button text circle @click="themeStore.toggleTheme">
@@ -177,6 +180,21 @@ onMounted(() => {
   padding: 20px;
   transition: background-color 0.3s;
 }
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.page-title {
+  display: none;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .menu-toggle {
   display: none;
   font-size: 22px;
@@ -200,6 +218,9 @@ onMounted(() => {
     transform: translateX(0);
   }
   .menu-toggle {
+    display: block;
+  }
+  .page-title {
     display: block;
   }
   .mobile-overlay {

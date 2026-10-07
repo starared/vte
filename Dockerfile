@@ -2,7 +2,7 @@
 # 内存占用 ~10-20MB，镜像体积 ~30MB
 
 # ========== 前端构建 ==========
-FROM node:18-alpine AS frontend
+FROM node:22-alpine AS frontend
 
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
@@ -12,7 +12,7 @@ COPY frontend/ .
 RUN npm run build
 
 # ========== Go 后端构建 ==========
-FROM golang:1.21-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /app/backend
 COPY backend/go.mod backend/go.sum ./

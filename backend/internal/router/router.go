@@ -1,6 +1,7 @@
 package router
 
 import (
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -63,10 +64,15 @@ func Setup(cfg *config.Config) *gin.Engine {
 	r := gin.New()
 	trusted := []string{"127.0.0.1", "::1"}
 	if value := os.Getenv("TRUSTED_PROXIES"); value != "" {
-		trusted = strings.Split(value, ",")
+		trusted = nil
+		for _, item := range strings.Split(value, ",") {
+			if item = strings.TrimSpace(item); item != "" {
+				trusted = append(trusted, item)
+			}
+		}
 	}
 	if err := r.SetTrustedProxies(trusted); err != nil {
-		panic(err)
+		log.Fatalf("TRUSTED_PROXIES 配置无效（应为逗号分隔的 IP 或 CIDR，例如 127.0.0.1,172.16.0.0/12）: %v", err)
 	}
 	r.Use(gin.Recovery())
 	r.Use(CORSMiddleware())

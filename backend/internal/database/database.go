@@ -91,6 +91,7 @@ func createTables() error {
 			custom_name INTEGER DEFAULT 0,
 			is_active INTEGER DEFAULT 1,
 			source TEXT DEFAULT '',
+			disabled_by_sync INTEGER DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (provider_id) REFERENCES providers(id)
 		)`,
@@ -176,6 +177,8 @@ func migrateAddMissingColumns() {
 	db.Exec("ALTER TABLE users ADD COLUMN password_changed_at INTEGER DEFAULT 0")
 	// 模型来源：manual（手动添加）/ fetched（从上游拉取）/ ''（旧数据，来源未知）
 	db.Exec("ALTER TABLE models ADD COLUMN source TEXT DEFAULT ''")
+	// 是否被「拉取模型」因上游下线而自动停用
+	db.Exec("ALTER TABLE models ADD COLUMN disabled_by_sync INTEGER DEFAULT 0")
 }
 
 // migrateProviderAPIKeys 将 providers 表中的 api_key 迁移到 provider_api_keys 表
