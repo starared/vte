@@ -61,17 +61,22 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import {
+  DataAnalysis, Connection, Cpu, Key, TrendCharts, Setting, InfoFilled,
+  Fold, Sunny, Moon, Monitor
+} from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
 import { useThemeStore } from '../stores/theme'
+import { useIsMobile } from '../composables/useIsMobile'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 const themeStore = useThemeStore()
+const isMobile = useIsMobile()
 const sidebarOpen = ref(false)
-const isMobile = ref(false)
 
 const sidebarWidth = '220px'
 const sidebarText = '#d8d2c8'
@@ -81,10 +86,10 @@ const themeTooltip = computed(() => {
   return labels[themeStore.theme]
 })
 
-function checkMobile() {
-  isMobile.value = window.innerWidth < 768
-  if (!isMobile.value) sidebarOpen.value = false
-}
+// 切回宽屏时收起抽屉
+watch(isMobile, mobile => {
+  if (!mobile) sidebarOpen.value = false
+})
 
 function handleMenuSelect() {
   if (isMobile.value) sidebarOpen.value = false
@@ -96,13 +101,7 @@ function handleLogout() {
 }
 
 onMounted(() => {
-  checkMobile()
-  window.addEventListener('resize', checkMobile)
   themeStore.loadTheme()
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', checkMobile)
 })
 </script>
 

@@ -19,7 +19,7 @@
       title="为外部或短期使用生成受限的 API Key，可指定可用模型、各自次数、总次数、有效期、速率限制和并发限制。"
     />
 
-    <el-table :data="keys" v-loading="loading" border style="width: 100%" size="small">
+    <el-table v-if="!isMobile" :data="keys" v-loading="loading" border style="width: 100%" size="small">
       <el-table-column prop="name" label="名称" min-width="100">
         <template #default="{ row }">
           {{ row.name || '-' }}
@@ -29,7 +29,7 @@
         <template #default="{ row }">
           <div class="token-row">
             <span class="token-text">{{ maskToken(row.token) }}</span>
-            <el-button size="small" @click="copy(row.token)">复制</el-button>
+            <el-button size="small" @click="copyText(row.token)">复制</el-button>
           </div>
         </template>
       </el-table-column>
@@ -65,7 +65,7 @@
       <el-table-column label="有效期" width="160">
         <template #default="{ row }">
           <div v-if="row.expires_at">
-            <div>{{ formatTime(row.expires_at) }}</div>
+            <div>{{ formatDateTime(row.expires_at) }}</div>
             <div class="expire-duration" v-if="row.expire_duration">
               ({{ row.expire_duration }}{{ unitLabel(row.expire_unit) }})
             </div>
@@ -85,8 +85,41 @@
       </el-table-column>
     </el-table>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑临时 API' : '新建临时 API'" width="680px" destroy-on-close>
-      <el-form :model="form" label-width="100px" label-position="left">
+    <!-- 移动端：卡片列表 -->
+    <div v-else class="key-cards" v-loading="loading">
+      <el-empty v-if="!loading && keys.length === 0" description="还没有临时 API" :image-size="80" />
+      <el-card v-for="row in keys" :key="row.id" shadow="never" class="key-card">
+        <div class="card-top">
+          <span class="card-name">{{ row.name || '未命名' }}</span>
+          <el-tag v-if="isExpired(row)" type="danger" size="small">已过期</el-tag>
+          <el-tag v-else-if="!row.is_active" type="warning" size="small">已禁用</el-tag>
+          <el-tag v-else type="success" size="small">可用</el-tag>
+        </div>
+        <div class="token-row">
+          <span class="token-text">{{ maskToken(row.token) }}</span>
+          <el-button size="small" @click="copyText(row.token)">复制</el-button>
+        </div>
+        <div class="tag-wrap">
+          <el-tag v-for="m in row.allowed_models?.slice(0, 3)" :key="m" size="small">{{ m }}</el-tag>
+          <el-tag v-if="row.allowed_models?.length > 3" size="small" type="info">+{{ row.allowed_models.length - 3 }}</el-tag>
+        </div>
+        <dl class="card-meta">
+          <dt>请求次数</dt>
+          <dd>{{ row.used_requests }} / {{ row.max_requests > 0 ? row.max_requests : '不限' }}</dd>
+          <dt>速率/并发</dt>
+          <dd>{{ limitSummary(row) }}</dd>
+          <dt>有效期</dt>
+          <dd>{{ row.expires_at ? formatDateTime(row.expires_at) : '永久' }}</dd>
+        </dl>
+        <div class="card-actions">
+          <el-button size="small" @click="openEdit(row)">编辑</el-button>
+          <el-button size="small" type="danger" plain @click="removeWithConfirm(row)">删除</el-button>
+        </div>
+      </el-card>
+    </div>
+
+    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑临时 API' : '新建临时 API'" width="680px" :fullscreen="isMobile" destroy-on-close>
+      <el-form :model="form" label-width="100px" :label-position="isMobile ? 'top' : 'left'">
         <el-form-item label="名称">
           <el-input v-model="form.name" placeholder="可选，用于标识" />
         </el-form-item>
@@ -124,8 +157,10 @@
         <el-divider content-position="left">请求限制</el-divider>
 
         <el-form-item label="总请求次数">
-          <el-input-number v-model.number="form.max_requests" :min="0" :step="10" controls-position="right" />
-          <span class="form-hint">0 为不限制</span>
+          <div class="field-row">
+            <el-input-number v-model.number="form.max_requests" :min="0" :step="10" controls-position="right" />
+            <span class="form-hint">0 为不限制</span>
+          </div>
         </el-form-item>
 
         <el-form-item label="速率限制">
@@ -139,12 +174,14 @@
               <el-option label="小时" value="hours" />
             </el-select>
           </div>
-          <div class="form-hint">均为0则不限制</div>
+          <div class="form-hint block">均为0则不限制</div>
         </el-form-item>
 
         <el-form-item label="并发限制">
-          <el-input-number v-model.number="form.concurrency_limit" :min="0" :step="1" controls-position="right" />
-          <span class="form-hint">0 为不限制</span>
+          <div class="field-row">
+            <el-input-number v-model.number="form.concurrency_limit" :min="0" :step="1" controls-position="right" />
+            <span class="form-hint">0 为不限制</span>
+          </div>
         </el-form-item>
 
         <el-divider content-position="left">有效期</el-divider>
@@ -152,13 +189,13 @@
         <el-form-item label="有效时长">
           <div class="expire-row">
             <el-input-number v-model.number="form.expire_duration" :min="0" :step="1" controls-position="right" placeholder="时长" />
-            <el-select v-model="form.expire_unit" placeholder="单位" style="width: 100px; margin-left: 8px">
+            <el-select v-model="form.expire_unit" placeholder="单位" clearable style="width: 100px">
               <el-option label="分钟" value="minutes" />
               <el-option label="小时" value="hours" />
               <el-option label="天" value="days" />
             </el-select>
           </div>
-          <div class="form-hint">时长为0或不选单位则永久有效</div>
+          <div class="form-hint block">时长为0或不选单位则永久有效</div>
         </el-form-item>
 
         <el-form-item label="状态">
@@ -178,6 +215,10 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import api from '../api'
+import { useIsMobile } from '../composables/useIsMobile'
+import { copyText, confirmAction, formatDateTime } from '../utils'
+
+const isMobile = useIsMobile()
 
 const loading = ref(false)
 const saving = ref(false)
@@ -202,12 +243,6 @@ const form = reactive({
 
 const maskToken = token => token ? `${token.slice(0, 8)}...${token.slice(-6)}` : ''
 
-const formatTime = t => {
-  if (!t) return '永久'
-  const d = new Date(t)
-  return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-}
-
 const isExpired = row => {
   if (!row.expires_at) return false
   return new Date(row.expires_at) < new Date()
@@ -221,6 +256,15 @@ const unitLabel = unit => {
 const rateLimitUnitLabel = unit => {
   const map = { seconds: '秒', minutes: '分钟', hours: '小时' }
   return map[unit] || '秒'
+}
+
+const limitSummary = row => {
+  const parts = []
+  if (row.rate_limit_count > 0) {
+    parts.push(`${row.rate_limit_count}次/${row.rate_limit_window}${rateLimitUnitLabel(row.rate_limit_unit)}`)
+  }
+  if (row.concurrency_limit > 0) parts.push(`并发${row.concurrency_limit}`)
+  return parts.length ? parts.join('，') : '不限'
 }
 
 async function loadData() {
@@ -315,7 +359,7 @@ async function submit() {
       rate_limit_unit: form.rate_limit_unit,
       concurrency_limit: form.concurrency_limit,
       expire_duration: form.expire_duration,
-      expire_unit: form.expire_unit,
+      expire_unit: form.expire_unit || '',
       is_active: form.is_active
     }
 
@@ -328,21 +372,23 @@ async function submit() {
     }
     dialogVisible.value = false
     loadData()
+  } catch {
+    // 错误提示已由拦截器处理
   } finally {
     saving.value = false
   }
 }
 
 async function remove(row) {
-  await api.delete(`/api/temp-keys/${row.id}`)
-  ElMessage.success('已删除')
-  loadData()
+  try {
+    await api.delete(`/api/temp-keys/${row.id}`)
+    ElMessage.success('已删除')
+    loadData()
+  } catch {}
 }
 
-function copy(text) {
-  if (!text) return
-  navigator.clipboard.writeText(text)
-  ElMessage.success('已复制')
+async function removeWithConfirm(row) {
+  if (await confirmAction('确认删除该临时 API？')) remove(row)
 }
 
 onMounted(loadData)
@@ -409,20 +455,87 @@ onMounted(loadData)
   font-size: 12px;
 }
 .form-hint {
-  margin-left: 8px;
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+.form-hint.block {
+  width: 100%;
+  margin-top: 4px;
+}
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .rate-limit-row {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .expire-row {
   display: flex;
   align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .el-divider {
   margin: 16px 0 8px;
+}
+
+/* 移动端卡片 */
+.key-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 80px;
+}
+.key-card :deep(.el-card__body) {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.card-name {
+  font-weight: 600;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  font-size: 13px;
+  margin: 0;
+}
+.card-meta dt {
+  color: var(--el-text-color-secondary);
+}
+.card-meta dd {
+  margin: 0;
+  text-align: right;
+}
+.card-actions {
+  display: flex;
+  gap: 8px;
+}
+.card-actions .el-button {
+  flex: 1;
+  margin-left: 0;
+}
+
+@media (max-width: 768px) {
+  .header h2 { font-size: 18px; }
+  .limit-row { flex-wrap: wrap; }
+  .limit-name { min-width: 0; width: 100%; }
 }
 </style>

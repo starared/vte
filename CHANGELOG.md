@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased
+
+### Frontend fixes
+
+- Copy buttons now work when the panel is opened over plain HTTP
+  (e.g. `http://IP:8050`): falls back to `execCommand('copy')` when the
+  Clipboard API is unavailable, and reports failure instead of always
+  showing "copied".
+- Cancelling a confirmation dialog no longer raises an unhandled promise
+  rejection.
+- Errors are shown once: the axios interceptor is the single place that
+  displays request errors; views no longer add a second toast.
+- 401 handling goes through the router and the user store (no full page
+  reload, one "session expired" message); a wrong password on the login
+  page shows the error instead of reloading the page. Transient errors when
+  loading the current user no longer log the user out.
+- Switches (model / key enable) roll back when the request fails.
+- Models: status filter works again after clearing it; page resets to 1 when
+  filters change; removed a no-op `onActivated` hook.
+- Settings: username field is filled once the user profile loads; theme
+  radio stays in sync with the header toggle; each section has its own
+  saving state; new password must be entered twice.
+- About: dark-mode colours fixed (code blocks were light-on-light); opening
+  the page no longer pops a "latest version" toast.
+- Token stats: background polling pauses while the tab is hidden and no
+  longer shows an error toast every 10 seconds when offline.
+- Theme is applied on the login page too.
+
+### Mobile
+
+- Shared `useIsMobile()` composable (reactive to resizing/rotation) replaces
+  three separate checks.
+- Providers and temporary API keys render as cards on narrow screens; the
+  provider action column is reduced to "Models / Test / More".
+- Dialogs and forms use top-aligned labels on phones; temp-key dialog is
+  fullscreen; tables hide secondary columns.
+
+### Cleanup
+
+- Removed unused `echarts` and `dayjs` dependencies (left over from the
+  removed trend chart).
+- Icons are imported per component instead of registering every Element
+  Plus icon globally.
+- New `utils/` helpers (`copyText`, `confirmAction`, `formatDateTime`,
+  `formatNumber`) and an `ApiKeyField` component shared by Dashboard and
+  Settings.
+- README no longer lists the removed real-time logs page.
+
 ## 1.1.0
 
 ### Frontend redesign

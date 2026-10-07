@@ -20,7 +20,7 @@
           <span class="value error" v-else>检查失败</span>
         </div>
         <div class="version-actions">
-          <el-button @click="checkUpdate" :loading="loading">检查更新</el-button>
+          <el-button @click="checkUpdate(true)" :loading="loading">检查更新</el-button>
           <el-button type="primary" @click="showUpdateGuide" :disabled="!hasUpdate">更新指南</el-button>
         </div>
       </div>
@@ -118,19 +118,20 @@ const hasUpdate = computed(() => {
   return compareVersion(latestVersion.value, currentVersion.value) > 0
 })
 
-async function checkUpdate() {
+// manual = true 表示用户点击了按钮；打开页面时的自动检查只更新显示，不弹提示
+async function checkUpdate(manual = false) {
   loading.value = true
   try {
-    const res = await api.get('/api/version/check')
+    const res = await api.get('/api/version/check', { silent: true })
     currentVersion.value = res.data.current
     latestVersion.value = res.data.latest
     if (hasUpdate.value) {
       ElMessage.warning('发现新版本！')
-    } else {
+    } else if (manual) {
       ElMessage.success('已是最新版本')
     }
   } catch {
-    ElMessage.error('检查更新失败')
+    if (manual) ElMessage.error('检查更新失败')
   } finally {
     loading.value = false
   }
@@ -155,12 +156,13 @@ onMounted(() => {
 .section { margin-bottom: 20px; }
 .version-info { line-height: 2; }
 .version-row { display: flex; align-items: center; }
-.version-row .label { width: 100px; color: #606266; }
+.version-row .label { width: 100px; color: var(--el-text-color-regular); }
 .version-row .value { font-weight: 500; }
-.version-row .value.error { color: #f56c6c; }
+.version-row .value.error { color: var(--el-color-danger); }
 .version-actions { margin-top: 16px; }
 .code {
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-primary);
   padding: 12px;
   border-radius: 4px;
   overflow-x: auto;
@@ -168,11 +170,11 @@ onMounted(() => {
   font-family: 'Consolas', 'Monaco', monospace;
 }
 .warning-card :deep(.el-card__header) {
-  background: #fdf6ec;
+  background: var(--el-color-warning-light-9);
 }
-.warning-header { color: #e6a23c; font-weight: 600; }
+.warning-header { color: var(--el-color-warning); font-weight: 600; }
 .warning-content {
-  color: #606266;
+  color: var(--el-text-color-regular);
   line-height: 1.8;
 }
 .warning-content ul {
@@ -181,11 +183,11 @@ onMounted(() => {
 }
 .warning-content li { margin: 8px 0; }
 .disclaimer {
-  color: #f56c6c;
+  color: var(--el-color-danger);
   font-weight: 500;
   margin-top: 12px;
 }
-.update-guide p { margin-bottom: 8px; color: #303133; }
+.update-guide p { margin-bottom: 8px; color: var(--el-text-color-primary); }
 
 @media (max-width: 768px) {
   .about h2 { font-size: 18px; }

@@ -2,6 +2,13 @@
   <router-view />
 </template>
 
+<script setup>
+import { useThemeStore } from './stores/theme'
+
+// 在根组件初始化主题，保证登录页也能应用本地保存的亮/暗色设置
+useThemeStore()
+</script>
+
 <style>
 * {
   margin: 0;
@@ -22,7 +29,6 @@ html.dark {
   --vte-sidebar-text: #cec8bf;
   --vte-header-bg: #232120;
   --vte-card-bg: #232120;
-  --vte-terminal-bg: #16140f;
 }
 
 html:not(.dark) {
@@ -31,6 +37,5 @@ html:not(.dark) {
   --vte-sidebar-text: #d8d2c8;
   --vte-header-bg: #fffdfa;
   --vte-card-bg: #fff;
-  --vte-terminal-bg: #201d18;
 }
 </style>

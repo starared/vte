@@ -10,7 +10,6 @@ A lightweight, self-hosted API gateway that unifies multiple AI service provider
 - 🎯 **Model Management** - Fetch models from providers and selectively enable them
 - 🔑 **Unified Entry** - One URL + API Key for all your AI services
 - 🖥️ **Web Admin Panel** - Beautiful web interface for easy management
-- 📋 **Real-time Logs** - Terminal-style logging for debugging
 - 🔄 **Stream Control** - Force streaming or non-streaming mode globally
 - 🏷️ **Model Prefixes** - Organize models by provider with custom prefixes
 - ✏️ **Model Aliases** - Custom display names for models (shows B to users, uses A internally)

@@ -21,7 +21,8 @@ export const useUserStore = defineStore('user', () => {
       const res = await api.get('/api/auth/me')
       user.value = res.data
     } catch {
-      logout()
+      // 401 已由 api 拦截器统一处理（登出并跳转登录页）；
+      // 网络抖动等其他错误不应把用户踢下线
     }
   }
 
