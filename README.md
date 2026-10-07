@@ -157,6 +157,7 @@ cd backend
 | `UPSTREAM_TIMEOUT_SECONDS` | Max upstream silence (seconds): wait for response headers and the gap between streamed chunks; total duration is unlimited | `300` |
 | `TOKEN_STATS_TZ` | Time zone of the daily token-stats reset | `Asia/Shanghai` |
 | `TOKEN_STATS_RESET_HOUR` | Hour (0-23) at which token stats reset | `15` |
+| `TRUSTED_PROXIES` | Comma-separated reverse-proxy addresses/CIDRs whose `X-Forwarded-For` is trusted | `127.0.0.1,::1` |
 
 Example:
 ```bash
@@ -276,6 +277,17 @@ Add several keys to a provider and requests are spread across them round-robin. 
 | `UPSTREAM_TIMEOUT_SECONDS` | Max upstream silence (seconds): wait for response headers and the gap between streamed chunks; total duration is unlimited | `300` |
 | `TOKEN_STATS_TZ` | Time zone of the daily token-stats reset | `Asia/Shanghai` |
 | `TOKEN_STATS_RESET_HOUR` | Hour (0-23) at which token stats reset | `15` |
+| `TRUSTED_PROXIES` | Comma-separated reverse-proxy addresses/CIDRs whose `X-Forwarded-For` is trusted | `127.0.0.1,::1` |
+
+### Reverse Proxy (Nginx etc.)
+
+VTE uses the client IP for login rate limiting (10 attempts per IP per minute) and logs. Behind a reverse proxy VTE sees the proxy's address, so the proxy must be listed in `TRUSTED_PROXIES`; otherwise every visitor shares one login budget.
+
+- Nginx and VTE both on the host: the default works.
+- VTE in Docker, Nginx on the host: requests come from the Docker gateway (e.g. `172.17.0.1`, `172.18.0.1`); set `TRUSTED_PROXIES=127.0.0.1,::1,172.16.0.0/12`.
+- Nginx in Docker too: use the subnet of the network it shares with VTE.
+
+Only trust your own proxies — a trusted address can claim any client IP.
 
 ### Docker Volumes
 
@@ -361,6 +373,8 @@ vte/
 - Changing the username keeps you logged in; changing the password signs out other sessions.
 - Deleting a provider also deletes its keys; token counting works offline (no tokenizer download); stats reset time is configurable.
 - Rate-limit / concurrency settings are back in the Settings page.
+- Model display names must be unique; renames and prefix changes update temporary keys and rate-limit rules; models that went offline upstream are re-enabled when they return.
+- Editable extra request headers; 8-character minimum passwords; Docker images built with Go 1.24 / Node 22.
 - Frontend fixes (copy over HTTP, duplicate error toasts, dark mode) and a mobile-friendly layout. See [CHANGELOG.md](CHANGELOG.md).
 
 ### v1.1.0

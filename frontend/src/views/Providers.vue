@@ -99,7 +99,7 @@
         </el-form-item>
         <el-form-item label="模型前缀">
           <el-input v-model="form.model_prefix" placeholder="如: openai、vertex，用于区分来源" />
-          <div class="form-tip">用户看到的模型名会加上此前缀（如 openai/gpt-4），修改后自动同步到所有模型</div>
+          <div class="form-tip">用户看到的模型名会加上此前缀（如 openai/gpt-4）。修改后自动同步到所有未自定义名称的模型，临时 API 和限流规则中的引用也会一起更新</div>
         </el-form-item>
         
         <template v-if="form.provider_type === 'standard'">
@@ -126,6 +126,15 @@
         <el-form-item label="代理地址">
           <el-input v-model="form.proxy_url" placeholder="可选，如: http://127.0.0.1:7890" />
         </el-form-item>
+        <el-form-item label="额外请求头">
+          <el-input
+            v-model="form.extra_headers"
+            type="textarea"
+            :rows="3"
+            placeholder='可选，JSON 对象，如: {"HTTP-Referer": "https://example.com"}'
+          />
+          <div class="form-tip">每次请求上游时附带这些请求头，值必须是字符串</div>
+        </el-form-item>
         <el-form-item label="状态" v-if="editingId">
           <el-switch v-model="form.is_active" />
         </el-form-item>
@@ -144,8 +153,16 @@
         <el-button v-if="canFetch(currentProvider)" :loading="fetchingId === currentProvider?.id" @click="fetchModels(currentProvider)">从上游拉取</el-button>
       </div>
       <el-table :data="providerModels" max-height="400" v-loading="modelsLoading" empty-text="暂无模型">
-        <el-table-column prop="original_id" label="模型 ID" min-width="200" />
-        <el-table-column prop="display_name" label="显示名称" min-width="150" />
+        <el-table-column prop="original_id" label="模型 ID" min-width="200">
+          <template #default="{ row }">
+            <div class="model-id-cell">
+              <span>{{ row.original_id }}</span>
+              <el-tag v-if="row.source === 'manual'" size="small" type="info">手动</el-tag>
+              <el-tag v-if="row.disabled_by_sync" size="small" type="danger">上游已下线</el-tag>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="!isMobile" prop="display_name" label="显示名称" min-width="150" />
         <el-table-column prop="is_active" label="状态" width="100">
           <template #default="{ row }">
             <el-switch v-model="row.is_active" @change="toggleModel(row)" />
@@ -297,8 +314,27 @@ const form = ref({
   vertex_project: '',
   vertex_location: 'global',
   proxy_url: '',
+  extra_headers: '',
   is_active: true
 })
+
+// 额外请求头必须是 { "名称": "字符串值" } 形式的 JSON 对象
+function validateExtraHeaders(text) {
+  if (!text.trim()) return ''
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return '额外请求头不是有效的 JSON'
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return '额外请求头必须是 JSON 对象'
+  }
+  if (Object.values(parsed).some(v => typeof v !== 'string')) {
+    return '额外请求头的值必须都是字符串'
+  }
+  return ''
+}
 
 async function loadProviders() {
   loading.value = true
@@ -317,14 +353,14 @@ function showAdd() {
   form.value = {
     name: '', base_url: '', api_key: '', model_prefix: '',
     provider_type: 'standard', vertex_project: '', vertex_location: 'global',
-    proxy_url: '', is_active: true
+    proxy_url: '', extra_headers: '', is_active: true
   }
   dialogVisible.value = true
 }
 
 function editProvider(row) {
   editingId.value = row.id
-  form.value = { ...row, proxy_url: row.proxy_url || '', api_key: '' }
+  form.value = { ...row, proxy_url: row.proxy_url || '', extra_headers: row.extra_headers || '', api_key: '' }
   dialogVisible.value = true
 }
 
@@ -345,6 +381,12 @@ async function saveProvider() {
     ElMessage.warning('请填写 API Key')
     return
   }
+  const headersError = validateExtraHeaders(form.value.extra_headers || '')
+  if (headersError) {
+    ElMessage.warning(headersError)
+    return
+  }
+  form.value.extra_headers = (form.value.extra_headers || '').trim()
   saving.value = true
   try {
     if (editingId.value) {
@@ -627,6 +669,14 @@ onMounted(loadProviders)
 }
 .card-actions > .el-dropdown > .el-button {
   width: 100%;
+}
+
+.model-id-cell {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  word-break: break-all;
 }
 
 .key-display {

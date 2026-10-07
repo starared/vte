@@ -29,6 +29,10 @@
           <div class="display-name-cell">
             <span class="display-name">{{ row.display_name || row.original_id }}</span>
             <el-tag v-if="row.custom_name" size="small" type="warning" class="custom-tag">自定义</el-tag>
+            <el-tag v-if="row.source === 'manual'" size="small" type="info" class="custom-tag">手动</el-tag>
+            <el-tooltip v-if="row.disabled_by_sync" content="上游模型列表中已不再包含此模型，拉取时自动停用；重新出现时会自动启用" placement="top">
+              <el-tag size="small" type="danger" class="custom-tag">上游已下线</el-tag>
+            </el-tooltip>
           </div>
           <div v-if="isMobile" class="sub-line">
             {{ row.provider_name }}<template v-if="row.display_name && row.display_name !== row.original_id"> · {{ row.original_id }}</template>
@@ -86,7 +90,7 @@
         </el-form-item>
         <el-form-item>
           <el-text type="info" size="small">
-            提示：用户通过 API 请求时使用此显示名称，实际转发时使用原始模型 ID
+            提示：用户通过 API 请求时使用此显示名称，实际转发时使用原始模型 ID。显示名称不能与其他模型重复；临时 API 和限流规则中的引用会自动更新为新名称。
           </el-text>
         </el-form-item>
       </el-form>
@@ -268,7 +272,8 @@ onMounted(loadModels)
 .display-name-cell {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .display-name {
   word-break: break-all;

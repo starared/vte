@@ -197,7 +197,7 @@
           <el-input v-model="oldPassword" type="password" show-password class="field-input" autocomplete="current-password" />
         </el-form-item>
         <el-form-item label="新密码">
-          <el-input v-model="newPassword" type="password" show-password class="field-input" autocomplete="new-password" />
+          <el-input v-model="newPassword" type="password" show-password class="field-input" autocomplete="new-password" placeholder="至少 8 位" />
         </el-form-item>
         <el-form-item label="确认新密码">
           <el-input v-model="confirmPassword" type="password" show-password class="field-input" autocomplete="new-password" @keyup.enter="changePassword" />
@@ -445,6 +445,10 @@ async function changeUsername() {
 async function changePassword() {
   if (!oldPassword.value || !newPassword.value) {
     ElMessage.warning('请输入原密码和新密码')
+    return
+  }
+  if (newPassword.value.length < 8) {
+    ElMessage.warning('新密码至少需要 8 位')
     return
   }
   if (newPassword.value !== confirmPassword.value) {

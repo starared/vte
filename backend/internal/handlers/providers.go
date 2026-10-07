@@ -18,7 +18,7 @@ func ListProviders(c *gin.Context) {
 	db := database.DB()
 	rows, err := db.Query(`
 		SELECT id, name, base_url, model_prefix, provider_type, 
-		       vertex_project, vertex_location, COALESCE(proxy_url, ''), is_active, created_at
+		       vertex_project, vertex_location, COALESCE(extra_headers, ''), COALESCE(proxy_url, ''), is_active, created_at
 		FROM providers
 	`)
 	if err != nil {
@@ -33,7 +33,7 @@ func ListProviders(c *gin.Context) {
 		var isActive int
 		var vertexProject, vertexLocation *string
 		err := rows.Scan(&p.ID, &p.Name, &p.BaseURL, &p.ModelPrefix, &p.ProviderType,
-			&vertexProject, &vertexLocation, &p.ProxyURL, &isActive, &p.CreatedAt)
+			&vertexProject, &vertexLocation, &p.ExtraHeaders, &p.ProxyURL, &isActive, &p.CreatedAt)
 		if err != nil {
 			continue
 		}
@@ -217,38 +217,45 @@ func UpdateProvider(c *gin.Context) {
 		args = append(args, active)
 	}
 
+	tx, err := db.Begin()
+	if err != nil {
+		c.JSON(500, gin.H{"detail": "更新失败"})
+		return
+	}
+	defer tx.Rollback()
+
 	if len(updates) > 0 {
 		updates = append(updates, "updated_at = CURRENT_TIMESTAMP")
-		query := "UPDATE providers SET "
-		for i, u := range updates {
-			if i > 0 {
-				query += ", "
-			}
-			query += u
-		}
-		query += " WHERE id = ?"
+		query := "UPDATE providers SET " + strings.Join(updates, ", ") + " WHERE id = ?"
 		args = append(args, id)
-
-		_, err = db.Exec(query, args...)
-		if err != nil {
+		if _, err := tx.Exec(query, args...); err != nil {
 			c.JSON(500, gin.H{"detail": "更新失败"})
 			return
 		}
 	}
 
-	// 如果前缀改变，批量更新非自定义名称的模型的 display_name
-	if req.ModelPrefix != nil {
+	// 如果前缀改变，同步非自定义名称模型的 display_name，并更新引用这些名称的配置
+	if req.ModelPrefix != nil && *req.ModelPrefix != oldPrefix {
 		newPrefix := *req.ModelPrefix
-		if newPrefix != oldPrefix {
-			if newPrefix != "" {
-				// 有前缀：display_name = prefix/original_id（只更新非自定义名称的模型）
-				db.Exec("UPDATE models SET display_name = ? || '/' || original_id WHERE provider_id = ? AND (custom_name = 0 OR custom_name IS NULL)", newPrefix, id)
-			} else {
-				// 无前缀：display_name = original_id（只更新非自定义名称的模型）
-				db.Exec("UPDATE models SET display_name = original_id WHERE provider_id = ? AND (custom_name = 0 OR custom_name IS NULL)", id)
+		renames, err := applyPrefixChange(tx, id, newPrefix)
+		if err != nil {
+			if conflict, ok := err.(prefixConflictError); ok {
+				c.JSON(409, gin.H{"detail": conflict.Error()})
+				return
 			}
-			logger.Info(fmt.Sprintf("%s | 同步前缀 | %s | %s -> %s", c.ClientIP(), name, oldPrefix, newPrefix))
+			c.JSON(500, gin.H{"detail": "同步模型名称失败"})
+			return
 		}
+		if err := renameModelReferences(tx, renames); err != nil {
+			c.JSON(500, gin.H{"detail": "同步模型引用失败"})
+			return
+		}
+		logger.Info(fmt.Sprintf("%s | 同步前缀 | %s | %s -> %s", c.ClientIP(), name, oldPrefix, newPrefix))
+	}
+
+	if err := tx.Commit(); err != nil {
+		c.JSON(500, gin.H{"detail": "更新失败"})
+		return
 	}
 
 	// 清理连接池
@@ -360,6 +367,7 @@ func FetchModels(c *gin.Context) {
 		return
 	}
 	added, updated, deleted, disabled := result.added, result.updated, result.deleted, result.disabled
+	restored, duplicates := result.restored, result.duplicates
 
 	var messages []string
 	if added > 0 {
@@ -373,6 +381,12 @@ func FetchModels(c *gin.Context) {
 	}
 	if disabled > 0 {
 		messages = append(messages, fmt.Sprintf("停用 %d 个上游未列出的模型（已保留，可手动删除）", disabled))
+	}
+	if restored > 0 {
+		messages = append(messages, fmt.Sprintf("重新启用 %d 个恢复上线的模型", restored))
+	}
+	if duplicates > 0 {
+		messages = append(messages, fmt.Sprintf("%d 个新模型与已有模型重名，启用前请设置前缀或改名", duplicates))
 	}
 	if len(messages) == 0 {
 		messages = append(messages, "没有变化")
@@ -425,6 +439,13 @@ func AddModel(c *gin.Context) {
 	if modelPrefix != "" {
 		displayName = modelPrefix + "/" + req.ModelID
 	}
+	if taken, err := displayNameTaken(db, displayName); err != nil {
+		c.JSON(500, gin.H{"detail": "查询失败"})
+		return
+	} else if taken {
+		c.JSON(409, gin.H{"detail": fmt.Sprintf("模型名称「%s」已被其他提供商的模型使用，请先给提供商设置前缀", displayName)})
+		return
+	}
 
 	_, err = db.Exec(`
 		INSERT INTO models (provider_id, original_id, display_name, custom_name, is_active, source) 
@@ -448,10 +469,12 @@ func ListProviderModels(c *gin.Context) {
 	db := database.DB()
 
 	rows, err := db.Query(`
-		SELECT m.id, m.provider_id, p.name, m.original_id, m.display_name, m.is_active, COALESCE(m.custom_name, 0)
+		SELECT m.id, m.provider_id, p.name, m.original_id, m.display_name, m.is_active,
+		       COALESCE(m.custom_name, 0), COALESCE(m.source, ''), COALESCE(m.disabled_by_sync, 0)
 		FROM models m
 		JOIN providers p ON m.provider_id = p.id
 		WHERE m.provider_id = ?
+		ORDER BY m.original_id
 	`, id)
 	if err != nil {
 		c.JSON(500, gin.H{"detail": "查询失败"})
@@ -459,19 +482,12 @@ func ListProviderModels(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	var result []models.Model
+	result := []models.Model{}
 	for rows.Next() {
-		var m models.Model
-		var isActive, customName int
-		var displayName *string
-		if err := rows.Scan(&m.ID, &m.ProviderID, &m.ProviderName, &m.OriginalID, &displayName, &isActive, &customName); err != nil {
+		m, err := scanModelRow(rows)
+		if err != nil {
 			c.JSON(500, gin.H{"detail": "查询失败"})
 			return
-		}
-		m.IsActive = isActive == 1
-		m.CustomName = customName == 1
-		if displayName != nil {
-			m.DisplayName = *displayName
 		}
 		result = append(result, m)
 	}
@@ -516,15 +532,17 @@ func validateProvider(kind, base, project, headers, proxyAddress string) error {
 }
 
 type modelSyncResult struct {
-	added, updated, deleted, disabled int
+	added, updated, deleted, disabled, restored, duplicates int
 }
 
 // syncFetchedModels 用上游返回的模型列表更新本地模型（在一个事务内完成）。
 //
 // 上游列表里没有的本地模型：
 //   - 手动添加的（source=manual）：保留不动，上游 /models 不列出的模型常常仍可调用
-//   - 改过显示名称的、或来源未知的旧数据：停用但保留，避免丢失别名配置
+//   - 改过显示名称的、或来源未知的旧数据：停用但保留（标记 disabled_by_sync），避免丢失别名配置
 //   - 其余从上游拉取的：删除
+//
+// 之前因此被停用的模型重新出现在上游列表时，会自动重新启用。
 func syncFetchedModels(providerID int, modelPrefix string, modelsData []map[string]interface{}) (modelSyncResult, error) {
 	var res modelSyncResult
 	tx, err := database.DB().Begin()
@@ -534,26 +552,30 @@ func syncFetchedModels(providerID int, modelPrefix string, modelsData []map[stri
 	defer tx.Rollback()
 
 	type existing struct {
-		id         int
-		customName bool
-		source     string
-		active     bool
+		id             int
+		customName     bool
+		source         string
+		active         bool
+		disabledBySync bool
+		displayName    string
 	}
 	current := make(map[string]existing)
-	rows, err := tx.Query("SELECT id, original_id, COALESCE(custom_name, 0), COALESCE(source, ''), is_active FROM models WHERE provider_id = ?", providerID)
+	rows, err := tx.Query(`SELECT id, original_id, COALESCE(custom_name, 0), COALESCE(source, ''), is_active,
+		COALESCE(disabled_by_sync, 0), COALESCE(display_name, original_id) FROM models WHERE provider_id = ?`, providerID)
 	if err != nil {
 		return res, err
 	}
 	for rows.Next() {
 		var e existing
 		var originalID string
-		var customName, active int
-		if err := rows.Scan(&e.id, &originalID, &customName, &e.source, &active); err != nil {
+		var customName, active, bySync int
+		if err := rows.Scan(&e.id, &originalID, &customName, &e.source, &active, &bySync, &e.displayName); err != nil {
 			rows.Close()
 			return res, err
 		}
 		e.customName = customName == 1
 		e.active = active == 1
+		e.disabledBySync = bySync == 1
 		current[originalID] = e
 	}
 	rows.Close()
@@ -561,6 +583,7 @@ func syncFetchedModels(providerID int, modelPrefix string, modelsData []map[stri
 		return res, err
 	}
 
+	renames := map[string]string{}
 	fetched := make(map[string]bool)
 	for _, m := range modelsData {
 		modelID, ok := m["id"].(string)
@@ -579,16 +602,38 @@ func syncFetchedModels(providerID int, modelPrefix string, modelsData []map[stri
 			if source != "manual" {
 				source = "fetched"
 			}
-			if e.customName {
-				_, err = tx.Exec("UPDATE models SET source = ? WHERE id = ?", source, e.id)
-			} else {
-				_, err = tx.Exec("UPDATE models SET display_name = ?, source = ? WHERE id = ?", displayName, source, e.id)
+			name := e.displayName
+			if !e.customName && name != displayName {
+				name = displayName
+				renames[e.displayName] = displayName
 			}
-			if err != nil {
+			if _, err := tx.Exec("UPDATE models SET display_name = ?, source = ? WHERE id = ?", name, source, e.id); err != nil {
 				return res, err
 			}
 			res.updated++
+
+			// 之前因上游下线被自动停用，现在又出现了：恢复启用（不能与其他已启用模型重名）
+			if e.disabledBySync && !e.active {
+				conflicts, err := activeNameConflicts(tx, []int{e.id})
+				if err != nil {
+					return res, err
+				}
+				if len(conflicts) == 0 {
+					if _, err := tx.Exec("UPDATE models SET is_active = 1, disabled_by_sync = 0 WHERE id = ?", e.id); err != nil {
+						return res, err
+					}
+					res.restored++
+				}
+			}
 			continue
+		}
+
+		taken, err := displayNameTaken(tx, displayName)
+		if err != nil {
+			return res, err
+		}
+		if taken {
+			res.duplicates++ // 仍然添加（默认不启用），启用时会被拦下并提示改名
 		}
 		if _, err := tx.Exec(`
 			INSERT INTO models (provider_id, original_id, display_name, custom_name, is_active, source)
@@ -608,7 +653,7 @@ func syncFetchedModels(providerID int, modelPrefix string, modelsData []map[stri
 			// 保留
 		case e.customName || e.source == "":
 			if e.active {
-				if _, err := tx.Exec("UPDATE models SET is_active = 0 WHERE id = ?", e.id); err != nil {
+				if _, err := tx.Exec("UPDATE models SET is_active = 0, disabled_by_sync = 1 WHERE id = ?", e.id); err != nil {
 					return res, err
 				}
 				res.disabled++
@@ -621,5 +666,74 @@ func syncFetchedModels(providerID int, modelPrefix string, modelsData []map[stri
 		}
 	}
 
+	if err := renameModelReferences(tx, renames); err != nil {
+		return res, err
+	}
 	return res, tx.Commit()
+}
+
+type prefixConflictError []string
+
+func (e prefixConflictError) Error() string {
+	return fmt.Sprintf("修改前缀后以下模型名称会与其他模型重复：%s", strings.Join(e, "、"))
+}
+
+// applyPrefixChange 按新前缀重算提供商下非自定义名称模型的显示名称，返回 旧名称→新名称。
+// 新名称与其他模型重复时返回 prefixConflictError，不做任何修改。
+func applyPrefixChange(tx queryer, providerID int, newPrefix string) (map[string]string, error) {
+	type item struct {
+		id               int
+		oldName, newName string
+	}
+	rows, err := tx.Query(`SELECT id, original_id, COALESCE(display_name, original_id) FROM models
+		WHERE provider_id = ? AND (custom_name = 0 OR custom_name IS NULL)`, providerID)
+	if err != nil {
+		return nil, err
+	}
+	var items []item
+	var ids []int
+	for rows.Next() {
+		var it item
+		var originalID string
+		if err := rows.Scan(&it.id, &originalID, &it.oldName); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		it.newName = originalID
+		if newPrefix != "" {
+			it.newName = newPrefix + "/" + originalID
+		}
+		items = append(items, it)
+		ids = append(ids, it.id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var conflicts prefixConflictError
+	for _, it := range items {
+		taken, err := displayNameTaken(tx, it.newName, ids...)
+		if err != nil {
+			return nil, err
+		}
+		if taken {
+			conflicts = append(conflicts, it.newName)
+		}
+	}
+	if len(conflicts) > 0 {
+		return nil, conflicts
+	}
+
+	renames := map[string]string{}
+	for _, it := range items {
+		if it.newName == it.oldName {
+			continue
+		}
+		if _, err := tx.Exec("UPDATE models SET display_name = ? WHERE id = ?", it.newName, it.id); err != nil {
+			return nil, err
+		}
+		renames[it.oldName] = it.newName
+	}
+	return renames, nil
 }

@@ -45,7 +45,7 @@ type Provider struct {
 	ProviderType   string    `json:"provider_type"`
 	VertexProject  string    `json:"vertex_project,omitempty"`
 	VertexLocation string    `json:"vertex_location,omitempty"`
-	ExtraHeaders   string    `json:"-"`
+	ExtraHeaders   string    `json:"extra_headers"`
 	ProxyURL       string    `json:"proxy_url"`
 	IsActive       bool      `json:"is_active"`
 	CreatedAt      time.Time `json:"created_at"`
@@ -90,6 +90,10 @@ type Model struct {
 	DisplayName  string `json:"display_name"`
 	CustomName   bool   `json:"custom_name"`
 	IsActive     bool   `json:"is_active"`
+	// Source 模型来源：manual（手动添加）、fetched（从上游拉取）、空（1.2.0 之前的旧数据）
+	Source string `json:"source"`
+	// DisabledBySync 因上游列表不再包含而被「拉取模型」自动停用；重新出现时会自动启用
+	DisabledBySync bool `json:"disabled_by_sync"`
 }
 
 type Setting struct {

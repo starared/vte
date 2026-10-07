@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"vte/internal/auth"
@@ -12,6 +13,9 @@ import (
 	"vte/internal/logger"
 	"vte/internal/models"
 )
+
+// minPasswordLength 修改密码时新密码的最短长度
+const minPasswordLength = 8
 
 func Login(c *gin.Context) {
 	if !allowLogin(c.ClientIP()) {
@@ -65,6 +69,11 @@ func ChangePassword(c *gin.Context) {
 	var req models.ChangePasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"detail": "无效的请求"})
+		return
+	}
+
+	if utf8.RuneCountInString(req.NewPassword) < minPasswordLength {
+		c.JSON(400, gin.H{"detail": fmt.Sprintf("新密码至少需要 %d 位", minPasswordLength)})
 		return
 	}
 
