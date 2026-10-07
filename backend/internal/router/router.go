@@ -125,15 +125,6 @@ func Setup(cfg *config.Config) *gin.Engine {
 			models.POST("/batch-toggle", handlers.BatchToggleModels)
 		}
 
-		// 日志
-		logs := api.Group("/logs", auth.JWTAuth(), auth.AdminRequired())
-		{
-			logs.GET("", handlers.GetLogs)
-			logs.DELETE("", handlers.ClearLogs)
-			logs.GET("/stats", handlers.GetStats)
-			logs.DELETE("/stats", handlers.ResetStats)
-		}
-
 		// Token统计
 		tokens := api.Group("/tokens", auth.JWTAuth(), auth.AdminRequired())
 		{
@@ -171,8 +162,8 @@ func Setup(cfg *config.Config) *gin.Engine {
 			tempKeys.DELETE("/:id", handlers.DeleteTempAPIKey)
 		}
 
-		// 版本
-		api.GET("/version/check", handlers.CheckVersion)
+		// 版本（需要登录，避免被匿名调用来消耗 GitHub API 额度）
+		api.GET("/version/check", auth.JWTAuth(), handlers.CheckVersion)
 	}
 
 	// OpenAI 兼容接口

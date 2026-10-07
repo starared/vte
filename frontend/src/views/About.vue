@@ -7,7 +7,7 @@
       <div class="version-info">
         <div class="version-row">
           <span class="label">当前版本：</span>
-          <span class="value">v{{ currentVersion }}</span>
+          <span class="value">{{ currentVersion ? 'v' + currentVersion : '—' }}</span>
         </div>
         <div class="version-row">
           <span class="label">最新版本：</span>
@@ -92,7 +92,7 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 
-const currentVersion = ref('1.1.0')
+const currentVersion = ref('')  // 由后端 /api/version/check 返回
 const latestVersion = ref('')
 const loading = ref(false)
 

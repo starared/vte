@@ -8,10 +8,14 @@ export const useUserStore = defineStore('user', () => {
 
   const isLoggedIn = computed(() => !!token.value)
 
+  function setToken(value) {
+    token.value = value
+    localStorage.setItem('token', value)
+  }
+
   async function login(username, password) {
     const res = await api.post('/api/auth/login', { username, password })
-    token.value = res.data.access_token
-    localStorage.setItem('token', token.value)
+    setToken(res.data.access_token)
     await fetchUser()
   }
 
@@ -37,5 +41,5 @@ export const useUserStore = defineStore('user', () => {
     fetchUser()
   }
 
-  return { token, user, isLoggedIn, login, fetchUser, logout }
+  return { token, user, isLoggedIn, login, setToken, fetchUser, logout }
 })

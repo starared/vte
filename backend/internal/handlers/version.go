@@ -7,16 +7,47 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-const currentVersion = "1.1.0"
+// Version 当前版本号。构建时可用 -ldflags "-X vte/internal/handlers.Version=x.y.z" 覆盖；
+// 运行时如果能找到 VERSION 文件，以文件内容为准（Docker 镜像会携带该文件）。
+var Version = "1.2.0"
+
+// 最新版本检查结果缓存，避免每次打开「关于」页面都请求 GitHub（未认证的 GitHub API 每小时只有 60 次额度）
+var latestCache struct {
+	sync.Mutex
+	version   string
+	expiresAt time.Time
+}
+
+const (
+	latestCacheTTL       = time.Hour
+	latestCacheFailedTTL = 5 * time.Minute
+)
+
+func cachedLatestVersion() string {
+	latestCache.Lock()
+	defer latestCache.Unlock()
+	if time.Now().Before(latestCache.expiresAt) {
+		return latestCache.version
+	}
+	latest := getLatestVersion()
+	ttl := latestCacheTTL
+	if latest == "" {
+		ttl = latestCacheFailedTTL
+	}
+	latestCache.version = latest
+	latestCache.expiresAt = time.Now().Add(ttl)
+	return latest
+}
 
 func CheckVersion(c *gin.Context) {
 	// 尝试从多个可能的路径读取 VERSION 文件
-	version := currentVersion
+	version := Version
 	possiblePaths := []string{
 		"VERSION",
 		"../VERSION",
@@ -32,7 +63,7 @@ func CheckVersion(c *gin.Context) {
 	}
 
 	// 获取最新版本（从 Docker Hub 或 GitHub）
-	latest := getLatestVersion()
+	latest := cachedLatestVersion()
 
 	c.JSON(200, gin.H{
 		"current": version,

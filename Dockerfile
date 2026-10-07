@@ -19,7 +19,9 @@ COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 
 COPY backend/ .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o vte .
+COPY VERSION /app/VERSION
+# 版本号从 VERSION 文件注入，保证二进制和镜像版本一致
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X vte/internal/handlers.Version=$(cat /app/VERSION)" -o vte .
 
 # ========== 最终镜像 ==========
 FROM alpine:latest

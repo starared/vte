@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -72,36 +71,9 @@ type CustomRateLimitRule struct {
 	Enabled      bool   `json:"enabled"`       // 是否启用
 }
 
-// getRateLimitSettings 获取速率限制设置
-func getRateLimitSettings() (enabled bool, maxRequests int, windowSeconds int) {
-	db := database.DB()
-	var enabledStr, maxReqStr, windowStr string
-
-	err := db.QueryRow("SELECT value FROM settings WHERE key = 'rate_limit_enabled'").Scan(&enabledStr)
-	if err != nil || enabledStr != "true" {
-		return false, 0, 0
-	}
-
-	db.QueryRow("SELECT value FROM settings WHERE key = 'rate_limit_max_requests'").Scan(&maxReqStr)
-	db.QueryRow("SELECT value FROM settings WHERE key = 'rate_limit_window'").Scan(&windowStr)
-
-	maxRequests, _ = strconv.Atoi(maxReqStr)
-	windowSeconds, _ = strconv.Atoi(windowStr)
-
-	if maxRequests <= 0 {
-		maxRequests = 60
-	}
-	if windowSeconds <= 0 {
-		windowSeconds = 60
-	}
-
-	return true, maxRequests, windowSeconds
-}
-
-// checkRateLimit 检查速率限制
-func checkRateLimit() bool {
-	enabled, maxRequests, windowSeconds := getRateLimitSettings()
-	if !enabled {
+// checkRateLimit 检查全局速率限制（滑动窗口）
+func checkRateLimit(st *gatewaySettings) bool {
+	if !st.rateLimitEnabled {
 		return true
 	}
 
@@ -109,7 +81,7 @@ func checkRateLimit() bool {
 	defer rateLimitMu.Unlock()
 
 	now := time.Now()
-	windowStart := now.Add(-time.Duration(windowSeconds) * time.Second)
+	windowStart := now.Add(-time.Duration(st.rateLimitWindow) * time.Second)
 
 	// 清理过期记录
 	validTimes := make([]time.Time, 0, len(requestTimes))
@@ -120,34 +92,16 @@ func checkRateLimit() bool {
 	}
 	requestTimes = validTimes
 
-	// 检查是否超限
-	if len(requestTimes) >= maxRequests {
+	if len(requestTimes) >= st.rateLimitMax {
 		return false
 	}
-
-	// 记录本次请求
 	requestTimes = append(requestTimes, now)
 	return true
 }
 
-// getCustomRateLimitRules 获取自定义速率限制规则
-func getCustomRateLimitRules() []CustomRateLimitRule {
-	db := database.DB()
-	var rulesJSON string
-	err := db.QueryRow("SELECT value FROM settings WHERE key = 'custom_rate_limit_rules'").Scan(&rulesJSON)
-	if err != nil || rulesJSON == "" {
-		return nil
-	}
-
-	var rules []CustomRateLimitRule
-	json.Unmarshal([]byte(rulesJSON), &rules)
-	return rules
-}
-
 // checkCustomRateLimit 检查自定义速率限制
 // 返回: (是否通过, 触发的规则名称)
-func checkCustomRateLimit(providerID int, providerName string, modelName string) (bool, string) {
-	rules := getCustomRateLimitRules()
+func checkCustomRateLimit(rules []CustomRateLimitRule, providerID int, modelName string) (bool, string) {
 	if len(rules) == 0 {
 		return true, ""
 	}
@@ -187,28 +141,13 @@ func checkCustomRateLimit(providerID int, providerName string, modelName string)
 	return true, ""
 }
 
-// getConcurrencyLimit 获取并发限制
-func getConcurrencyLimit() int {
-	db := database.DB()
-	var enabledStr, limitStr string
-
-	err := db.QueryRow("SELECT value FROM settings WHERE key = 'concurrency_enabled'").Scan(&enabledStr)
-	if err != nil || enabledStr != "true" {
-		return 0 // 0 表示不限制
-	}
-
-	db.QueryRow("SELECT value FROM settings WHERE key = 'concurrency_limit'").Scan(&limitStr)
-	limit, _ := strconv.Atoi(limitStr)
-
-	if limit <= 0 {
-		return 0
-	}
-	return limit
+// acquireConcurrency 获取并发槽（读取当前设置）
+func acquireConcurrency() bool {
+	return acquireConcurrencyLimit(loadGatewaySettings().concurrencyLimit)
 }
 
-// acquireConcurrency 获取并发槽
-func acquireConcurrency() bool {
-	limit := getConcurrencyLimit()
+// acquireConcurrencyLimit 获取并发槽，limit 为 0 表示不限制
+func acquireConcurrencyLimit(limit int) bool {
 	if limit == 0 {
 		atomic.AddInt64(&currentConcurrency, 1)
 		return true
@@ -223,7 +162,6 @@ func acquireConcurrency() bool {
 			return true
 		}
 	}
-
 }
 
 // releaseConcurrency 释放并发槽
@@ -236,59 +174,32 @@ func GetCurrentConcurrency() int64 {
 	return atomic.LoadInt64(&currentConcurrency)
 }
 
-// getMaxRetries 从数据库获取最大重试次数
-func getMaxRetries() int {
-	db := database.DB()
-	var maxRetries string
-	err := db.QueryRow("SELECT value FROM settings WHERE key = 'max_retries'").Scan(&maxRetries)
-	if err != nil {
-		return 3 // 默认3次
-	}
-	retries, err := strconv.Atoi(maxRetries)
-	if err != nil || retries < 0 || retries > 10 {
-		return 3
-	}
-	return retries
-}
-
 // CustomErrorRule 自定义错误响应规则
 type CustomErrorRule struct {
 	Keyword  string `json:"keyword"`
 	Response string `json:"response"`
 }
 
-// getCustomErrorRules 获取自定义错误响应规则
-func getCustomErrorRules(db *sql.DB) (bool, []CustomErrorRule) {
-	var enabled, rulesJSON string
-	err := db.QueryRow("SELECT value FROM settings WHERE key = 'custom_error_enabled'").Scan(&enabled)
-	if err != nil || enabled != "true" {
-		return false, nil
+// respondCustomError 如果错误信息命中「自定义错误响应」规则，返回伪造的正常回复并返回 true
+func respondCustomError(c *gin.Context, st *gatewaySettings, errMsg, reason, modelName string, stream bool) bool {
+	matched, content := st.matchCustomError(errMsg)
+	if !matched {
+		return false
 	}
-
-	err = db.QueryRow("SELECT value FROM settings WHERE key = 'custom_error_rules'").Scan(&rulesJSON)
-	if err != nil {
-		return false, nil
-	}
-
-	var rules []CustomErrorRule
-	json.Unmarshal([]byte(rulesJSON), &rules)
-	return true, rules
+	logger.Error(fmt.Sprintf("%s | %s | 自定义响应(原错误: %s)", c.ClientIP(), modelName, reason))
+	writeFakeResponse(c, content, modelName, stream)
+	return true
 }
 
-// checkCustomErrorResponse 检查错误是否匹配自定义响应规则
-func checkCustomErrorResponse(db *sql.DB, errMsg string) (bool, string) {
-	enabled, rules := getCustomErrorRules(db)
-	if !enabled || len(rules) == 0 {
-		return false, ""
+func writeFakeResponse(c *gin.Context, content, modelName string, stream bool) {
+	if stream {
+		c.Header("Content-Type", "text/event-stream")
+		c.Header("Cache-Control", "no-cache")
+		c.Header("Connection", "keep-alive")
+		c.String(200, buildFakeStreamResponse(content, modelName))
+		return
 	}
-
-	errMsgLower := strings.ToLower(errMsg)
-	for _, rule := range rules {
-		if rule.Keyword != "" && strings.Contains(errMsgLower, strings.ToLower(rule.Keyword)) {
-			return true, rule.Response
-		}
-	}
-	return false, ""
+	c.JSON(200, buildFakeResponse(content, modelName))
 }
 
 // buildFakeResponse 构建伪造的正常响应
@@ -391,47 +302,30 @@ func buildFakeStreamResponse(content string, model string) string {
 	return sb.String()
 }
 
-// injectSystemPrompt 注入系统前置提示词
-func injectSystemPrompt(db *sql.DB, payload map[string]interface{}) {
-	// 检查是否启用
-	var enabled string
-	err := db.QueryRow("SELECT value FROM settings WHERE key = 'system_prompt_enabled'").Scan(&enabled)
-	if err != nil || enabled != "true" {
-		return
-	}
-
-	// 获取提示词内容
-	var prompt string
-	err = db.QueryRow("SELECT value FROM settings WHERE key = 'system_prompt'").Scan(&prompt)
-	if err != nil || prompt == "" {
-		return
-	}
-
-	// 获取现有 messages
-	messages, ok := payload["messages"].([]interface{})
-	if !ok {
-		return
-	}
-
-	// 创建系统提示词消息
-	systemMsg := map[string]interface{}{
-		"role":    "system",
-		"content": prompt,
-	}
-
-	// 在最前面插入系统提示词
-	newMessages := make([]interface{}, 0, len(messages)+1)
-	newMessages = append(newMessages, systemMsg)
-	newMessages = append(newMessages, messages...)
-	payload["messages"] = newMessages
-}
-
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true // 允许所有来源
+		return true // 允许所有来源（使用 API Key 认证，不依赖 Cookie）
 	},
+	// 浏览器无法给 WebSocket 设置请求头，可通过子协议传递密钥：
+	// new WebSocket(url, ["bearer", "<API Key>"])，服务端回应 "bearer"
+	Subprotocols:    []string{"bearer"},
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
+}
+
+// wsAPIKey 从请求中取出 WebSocket 的 API Key。优先级：
+// Authorization 请求头 > Sec-WebSocket-Protocol: bearer, <key> > ?api_key=（旧方式，密钥会出现在访问日志中，不推荐）
+func wsAPIKey(r *http.Request) string {
+	if h := r.Header.Get("Authorization"); h != "" {
+		return strings.TrimPrefix(h, "Bearer ")
+	}
+	protocols := websocket.Subprotocols(r)
+	for i := 0; i+1 < len(protocols); i++ {
+		if strings.EqualFold(protocols[i], "bearer") {
+			return protocols[i+1]
+		}
+	}
+	return r.URL.Query().Get("api_key")
 }
 
 func OpenAIListModels(c *gin.Context) {
@@ -462,7 +356,9 @@ func OpenAIListModels(c *gin.Context) {
 	currentTime := time.Now().Unix()
 	for rows.Next() {
 		var displayName, originalID, providerName *string
-		rows.Scan(&displayName, &originalID, &providerName)
+		if err := rows.Scan(&displayName, &originalID, &providerName); err != nil {
+			continue
+		}
 
 		modelID := ""
 		if displayName != nil && *displayName != "" {
@@ -494,8 +390,6 @@ func OpenAIListModels(c *gin.Context) {
 }
 
 func OpenAIChatCompletions(c *gin.Context) {
-	db := database.DB()
-
 	var tempKey *models.TempAPIKey
 	var allowedModels map[string]bool
 	if tk, ok := c.Get("temp_api_key"); ok {
@@ -548,19 +442,12 @@ func OpenAIChatCompletions(c *gin.Context) {
 		}
 	}
 
+	// 本次请求用到的设置只读取一次
+	st := loadGatewaySettings()
+
 	// 检查速率限制
-	if !checkRateLimit() {
-		errMsg := "请求过于频繁，请稍后重试 rate_limit_exceeded"
-		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
-			logger.Error(fmt.Sprintf("%s | %s | 自定义响应(原错误: 全局速率限制)", c.ClientIP(), modelName))
-			if stream {
-				c.Header("Content-Type", "text/event-stream")
-				c.Header("Cache-Control", "no-cache")
-				c.Header("Connection", "keep-alive")
-				c.String(200, buildFakeStreamResponse(customResponse, modelName))
-			} else {
-				c.JSON(200, buildFakeResponse(customResponse, modelName))
-			}
+	if !checkRateLimit(st) {
+		if respondCustomError(c, st, "请求过于频繁，请稍后重试 rate_limit_exceeded", "全局速率限制", modelName, stream) {
 			return
 		}
 		c.JSON(429, gin.H{
@@ -574,18 +461,8 @@ func OpenAIChatCompletions(c *gin.Context) {
 	}
 
 	// 检查并发限制
-	if !acquireConcurrency() {
-		errMsg := "服务器繁忙，请稍后重试 concurrency_limit_exceeded"
-		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
-			logger.Error(fmt.Sprintf("%s | %s | 自定义响应(原错误: 并发限制)", c.ClientIP(), modelName))
-			if stream {
-				c.Header("Content-Type", "text/event-stream")
-				c.Header("Cache-Control", "no-cache")
-				c.Header("Connection", "keep-alive")
-				c.String(200, buildFakeStreamResponse(customResponse, modelName))
-			} else {
-				c.JSON(200, buildFakeResponse(customResponse, modelName))
-			}
+	if !acquireConcurrencyLimit(st.concurrencyLimit) {
+		if respondCustomError(c, st, "服务器繁忙，请稍后重试 concurrency_limit_exceeded", "并发限制", modelName, stream) {
 			return
 		}
 		c.JSON(503, gin.H{
@@ -599,13 +476,10 @@ func OpenAIChatCompletions(c *gin.Context) {
 	}
 	defer releaseConcurrency()
 
-	// 获取流式模式设置
-	var streamMode string
-	db.QueryRow("SELECT value FROM settings WHERE key = 'stream_mode'").Scan(&streamMode)
-
-	if streamMode == "force_stream" {
+	// 流式模式设置
+	if st.streamMode == "force_stream" {
 		payload["stream"] = true
-	} else if streamMode == "force_non_stream" {
+	} else if st.streamMode == "force_non_stream" {
 		payload["stream"] = false
 	}
 
@@ -623,22 +497,13 @@ func OpenAIChatCompletions(c *gin.Context) {
 	}
 
 	// 注入系统前置提示词
-	injectSystemPrompt(db, payload)
+	st.injectSystemPrompt(payload)
 
 	// 查找模型
 	model, provider, err := findModel(modelName)
 	if err != nil {
 		errMsg := fmt.Sprintf("模型不可用: %s (%v)", modelName, err)
-		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
-			logger.Error(fmt.Sprintf("%s | %s | 自定义响应(原错误: 模型不存在)", c.ClientIP(), modelName))
-			if stream {
-				c.Header("Content-Type", "text/event-stream")
-				c.Header("Cache-Control", "no-cache")
-				c.Header("Connection", "keep-alive")
-				c.String(200, buildFakeStreamResponse(customResponse, modelName))
-			} else {
-				c.JSON(200, buildFakeResponse(customResponse, modelName))
-			}
+		if respondCustomError(c, st, errMsg, "模型不存在", modelName, stream) {
 			return
 		}
 		apiError(c, 404, "request_error", errMsg)
@@ -647,39 +512,23 @@ func OpenAIChatCompletions(c *gin.Context) {
 
 	if !provider.IsActive {
 		errMsg := fmt.Sprintf("提供商已禁用: %s", provider.Name)
-		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
-			logger.Error(fmt.Sprintf("%s | %s | 自定义响应(原错误: 提供商禁用)", c.ClientIP(), modelName))
-			if stream {
-				c.Header("Content-Type", "text/event-stream")
-				c.Header("Cache-Control", "no-cache")
-				c.Header("Connection", "keep-alive")
-				c.String(200, buildFakeStreamResponse(customResponse, modelName))
-			} else {
-				c.JSON(200, buildFakeResponse(customResponse, modelName))
-			}
+		if respondCustomError(c, st, errMsg, "提供商禁用", modelName, stream) {
 			return
 		}
 		apiError(c, 503, "request_error", errMsg)
 		return
 	}
 
-	// 检查自定义速率限制
+	// 统计和限流统一使用模型的显示名称（无论客户端用显示名还是原始 ID 请求）
 	displayName := modelName
 	if model.DisplayName != "" {
 		displayName = model.DisplayName
 	}
-	if passed, ruleName := checkCustomRateLimit(provider.ID, provider.Name, displayName); !passed {
+
+	// 检查自定义速率限制
+	if passed, ruleName := checkCustomRateLimit(st.customRateRules, provider.ID, displayName); !passed {
 		errMsg := fmt.Sprintf("触发自定义速率限制规则 [%s]，请稍后重试 custom_rate_limit_exceeded", ruleName)
-		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
-			logger.Error(fmt.Sprintf("%s | %s | 自定义响应(原错误: 自定义速率限制 %s)", c.ClientIP(), modelName, ruleName))
-			if stream {
-				c.Header("Content-Type", "text/event-stream")
-				c.Header("Cache-Control", "no-cache")
-				c.Header("Connection", "keep-alive")
-				c.String(200, buildFakeStreamResponse(customResponse, modelName))
-			} else {
-				c.JSON(200, buildFakeResponse(customResponse, modelName))
-			}
+		if respondCustomError(c, st, errMsg, "自定义速率限制 "+ruleName, modelName, stream) {
 			return
 		}
 		c.JSON(429, gin.H{
@@ -703,7 +552,7 @@ func OpenAIChatCompletions(c *gin.Context) {
 	// 替换模型名为原始 ID
 	originalID := model.OriginalID
 	if provider.ProviderType == "vertex_express" && len(originalID) > 0 {
-		if len(originalID) < 7 || originalID[:7] != "google/" {
+		if !strings.HasPrefix(originalID, "google/") {
 			originalID = "google/" + originalID
 		}
 	}
@@ -742,7 +591,6 @@ func OpenAIChatCompletions(c *gin.Context) {
 
 	// 构建客户端配置
 	cfg := &proxy.ProviderConfig{
-		BeforeAttempt:  func() { recordKeyAttempt(keyID) },
 		BaseURL:        provider.BaseURL,
 		APIKey:         provider.APIKey,
 		ProviderType:   provider.ProviderType,
@@ -750,39 +598,75 @@ func OpenAIChatCompletions(c *gin.Context) {
 		VertexLocation: provider.VertexLocation,
 		ProxyURL:       provider.ProxyURL,
 	}
+	cfg.BeforeAttempt = func() { recordKeyAttempt(keyID) }
+	// 上游返回 401/403/429 时换下一个还没试过的密钥
+	tried := map[int]bool{keyID: true}
+	cfg.RotateKey = func() bool {
+		nextKey, nextID, err := GetNextAPIKeyExcluding(provider.ID, tried)
+		if err != nil {
+			return false
+		}
+		tried[nextID] = true
+		logger.Warn(fmt.Sprintf("%s | %s | 密钥 #%d 被上游拒绝，切换到密钥 #%d", c.ClientIP(), modelName, keyID, nextID))
+		keyID = nextID
+		cfg.APIKey = nextKey
+		return true
+	}
 
 	if provider.ExtraHeaders != "" {
-		json.Unmarshal([]byte(provider.ExtraHeaders), &cfg.ExtraHeaders)
+		if err := json.Unmarshal([]byte(provider.ExtraHeaders), &cfg.ExtraHeaders); err != nil {
+			logger.Warn(fmt.Sprintf("提供商 %s 的额外请求头格式错误，已忽略", provider.Name))
+		}
 	}
 
 	startTime := time.Now()
 	logger.RequestStart()
 
+	req := &gatewayRequest{
+		settings:    st,
+		cfg:         cfg,
+		payload:     payload,
+		modelName:   modelName,
+		displayName: displayName,
+		model:       model,
+		provider:    provider,
+		startTime:   startTime,
+	}
 	if stream {
-		handleStreamResponse(c, cfg, payload, modelName, startTime)
+		handleStreamResponse(c, req)
 	} else {
-		handleNonStreamResponse(c, cfg, payload, modelName, startTime)
+		handleNonStreamResponse(c, req)
 	}
 }
 
-func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map[string]interface{}, modelName string, startTime time.Time) {
-	maxRetries := getMaxRetries()
-	result, err := cfg.CompletionForClient(c.Request.Context(), payload, maxRetries)
-	duration := time.Since(startTime).Seconds()
+// gatewayRequest 已解析好的一次网关请求
+type gatewayRequest struct {
+	settings    *gatewaySettings
+	cfg         *proxy.ProviderConfig
+	payload     map[string]interface{}
+	modelName   string // 客户端请求时使用的模型名
+	displayName string // 模型显示名称，用于统计
+	model       *modelInfo
+	provider    *providerInfo
+	startTime   time.Time
+}
+
+func handleNonStreamResponse(c *gin.Context, r *gatewayRequest) {
+	result, err := r.cfg.CompletionForClient(c.Request.Context(), r.payload, r.settings.maxRetries)
+	duration := time.Since(r.startTime).Seconds()
 
 	if err != nil {
 		errMsg := err.Error()
 
 		// 检查是否有自定义错误响应
-		db := database.DB()
-		if matched, customResponse := checkCustomErrorResponse(db, errMsg); matched {
-			logger.Info(fmt.Sprintf("%s | %s | %.2fs | 自定义响应(原错误: %s)", c.ClientIP(), modelName, duration, errMsg))
+		if matched, content := r.settings.matchCustomError(errMsg); matched {
+			logger.Info(fmt.Sprintf("%s | %s | %.2fs | 自定义响应(原错误: %s)", c.ClientIP(), r.modelName, duration, errMsg))
 			logger.RequestError()
-			c.JSON(200, buildFakeResponse(customResponse, modelName))
+			writeFakeResponse(c, content, r.modelName, false)
 			return
 		}
 
-		logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), modelName, duration, err))
+		logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), r.modelName, duration, err))
 		if errors.Is(err, context.Canceled) {
 			logger.RequestCancelled()
 		} else {
@@ -792,62 +676,44 @@ func handleNonStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload 
 		return
 	}
 
-	result["model"] = modelName
-	// 记录token使用情况
+	result["model"] = r.modelName
+	pt, ct, tt := 0, 0, 0
 	if usage, ok := result["usage"].(map[string]interface{}); ok {
-		promptTokens := 0
-		completionTokens := 0
-		totalTokens := 0
-
-		if pt, ok := usage["prompt_tokens"].(float64); ok {
-			promptTokens = int(pt)
-		}
-		if ct, ok := usage["completion_tokens"].(float64); ok {
-			completionTokens = int(ct)
-		}
-		if tt, ok := usage["total_tokens"].(float64); ok {
-			totalTokens = int(tt)
-		}
-
-		// 如果 token 都为 0，说明是被上游拦截的空响应，跳过日志记录
-		if totalTokens == 0 && promptTokens == 0 && completionTokens == 0 {
-			logger.RequestSuccess()
-			c.JSON(200, result)
-			return
-		}
-
-		// 获取provider名称
-		model := c.MustGet("resolved_model").(*modelInfo)
-		provider := c.MustGet("resolved_provider").(*providerInfo)
-		providerName := "unknown"
-		if provider != nil {
-			providerName = provider.Name
-		}
-		displayName := modelName
-		if model != nil && model.DisplayName != "" {
-			displayName = model.DisplayName
-		}
-
-		RecordTokenUsage(displayName, providerName, promptTokens, completionTokens, totalTokens)
-		logger.Info(fmt.Sprintf("%s | %s | %.2fs | Token: %d (in=%d, out=%d)", c.ClientIP(), modelName, duration, totalTokens, promptTokens, completionTokens))
-		logger.RequestSuccess()
-		c.JSON(200, result)
-		return
+		pt = intNumber(usage["prompt_tokens"])
+		ct = intNumber(usage["completion_tokens"])
+		tt = intNumber(usage["total_tokens"])
 	}
-
-	logger.Info(fmt.Sprintf("%s | %s | %.2fs", c.ClientIP(), modelName, duration))
+	// token 都为 0 通常是被上游拦截的空响应，不计入统计
+	if tt > 0 || pt > 0 || ct > 0 {
+		recordUsage(r, pt, ct, tt)
+		logger.Info(fmt.Sprintf("%s | %s | %.2fs | Token: %d (in=%d, out=%d)", c.ClientIP(), r.modelName, duration, tt, pt, ct))
+	} else {
+		logger.Info(fmt.Sprintf("%s | %s | %.2fs", c.ClientIP(), r.modelName, duration))
+	}
 	logger.RequestSuccess()
 	c.JSON(200, result)
 }
 
-func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map[string]interface{}, modelName string, startTime time.Time) {
-	resp, err := cfg.StreamForClient(c.Request.Context(), payload, getMaxRetries())
+func recordUsage(r *gatewayRequest, pt, ct, tt int) {
+	if err := RecordTokenUsage(r.displayName, r.provider.Name, pt, ct, tt); err != nil {
+		logger.Error("记录 token 用量失败: " + err.Error())
+	}
+}
+
+func handleStreamResponse(c *gin.Context, r *gatewayRequest) {
+	modelName := r.modelName
+	resp, err := r.cfg.StreamForClient(c.Request.Context(), r.payload, r.settings.maxRetries)
 	if err != nil {
-		logger.RequestError()
-		if matched, response := checkCustomErrorResponse(database.DB(), err.Error()); matched {
-			c.Header("Content-Type", "text/event-stream")
-			c.String(200, buildFakeStreamResponse(response, modelName))
+		if matched, content := r.settings.matchCustomError(err.Error()); matched {
+			logger.RequestError()
+			writeFakeResponse(c, content, modelName, true)
 			return
+		}
+		logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), modelName, time.Since(r.startTime).Seconds(), err))
+		if errors.Is(err, context.Canceled) {
+			logger.RequestCancelled()
+		} else {
+			logger.RequestError()
 		}
 		writeUpstreamError(c, err)
 		return
@@ -921,8 +787,6 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 		logger.Warn(fmt.Sprintf("%s | %s | 流未完成", c.ClientIP(), modelName))
 		return
 	}
-	model := c.MustGet("resolved_model").(*modelInfo)
-	provider := c.MustGet("resolved_provider").(*providerInfo)
 	pt, ct, tt := 0, 0, 0
 	estimated := usage == nil
 	if usage != nil {
@@ -930,17 +794,18 @@ func handleStreamResponse(c *gin.Context, cfg *proxy.ProviderConfig, payload map
 		ct = intNumber(usage["completion_tokens"])
 		tt = intNumber(usage["total_tokens"])
 	} else {
-		messages, _ := payload["messages"].([]interface{})
-		pt = tokenizer.CountMessagesTokens(messages, model.OriginalID)
-		ct = tokenizer.CountTokens(output.String(), model.OriginalID)
+		messages, _ := r.payload["messages"].([]interface{})
+		pt = tokenizer.CountMessagesTokens(messages, r.model.OriginalID)
+		ct = tokenizer.CountTokens(output.String(), r.model.OriginalID)
 		tt = pt + ct
 	}
 	if tt > 0 {
-		RecordTokenUsage(modelName, provider.Name, pt, ct, tt)
+		recordUsage(r, pt, ct, tt)
 	}
-	logger.Info(fmt.Sprintf("%s | %s | %.2fs | Token: %d (estimated=%v)", c.ClientIP(), modelName, time.Since(startTime).Seconds(), tt, estimated))
+	logger.Info(fmt.Sprintf("%s | %s | %.2fs | Token: %d (estimated=%v)", c.ClientIP(), modelName, time.Since(r.startTime).Seconds(), tt, estimated))
 	logger.RequestSuccess()
 }
+
 func intNumber(v interface{}) int { n, _ := v.(float64); return int(n) }
 
 type modelWithProvider struct {
@@ -1015,8 +880,8 @@ func scanModelProvider(row *sql.Row) (*modelInfo, *providerInfo, error) {
 
 // OpenAIChatCompletionsWS 处理 WebSocket 连接的聊天完成请求
 func OpenAIChatCompletionsWS(c *gin.Context) {
-	if c.GetHeader("Authorization") == "" && c.Query("api_key") != "" {
-		c.Request.Header.Set("Authorization", "Bearer "+c.Query("api_key"))
+	if key := wsAPIKey(c.Request); key != "" {
+		c.Request.Header.Set("Authorization", "Bearer "+key)
 	}
 	auth.APIKeyAuth()(c)
 	if c.IsAborted() {

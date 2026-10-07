@@ -33,7 +33,80 @@
         
         <el-form-item label="最大重试次数">
           <el-input-number v-model="maxRetries" :min="0" :max="10" @change="updateRetrySettings" />
-          <span class="hint-text inline-hint">API 请求失败时的重试次数（0-10）</span>
+          <span class="hint-text inline-hint">上游 5xx 或连接失败时的重试次数（0-10）；密钥被拒绝时会自动换密钥，不占用次数</span>
+        </el-form-item>
+      </el-form>
+    </el-card>
+
+    <el-card class="section">
+      <template #header>访问限制</template>
+
+      <el-form label-width="120px" :label-position="labelPosition">
+        <el-form-item label="全局速率限制">
+          <div class="limit-block">
+            <el-switch v-model="rateLimit.enabled" />
+            <template v-if="rateLimit.enabled">
+              <div class="inline-row">
+                <span class="hint-text">每</span>
+                <el-input-number v-model="rateLimit.window" :min="1" :max="31536000" controls-position="right" />
+                <span class="hint-text">秒最多</span>
+                <el-input-number v-model="rateLimit.max_requests" :min="1" controls-position="right" />
+                <span class="hint-text">次请求</span>
+              </div>
+            </template>
+            <span class="hint-text">对所有 API 请求生效（包括临时 API），超出时返回 429</span>
+          </div>
+        </el-form-item>
+
+        <el-form-item label="全局并发限制">
+          <div class="limit-block">
+            <el-switch v-model="concurrency.enabled" />
+            <div v-if="concurrency.enabled" class="inline-row">
+              <span class="hint-text">最多同时处理</span>
+              <el-input-number v-model="concurrency.limit" :min="1" controls-position="right" />
+              <span class="hint-text">个请求</span>
+            </div>
+            <span class="hint-text">当前正在处理 {{ concurrency.current }} 个请求</span>
+          </div>
+        </el-form-item>
+
+        <el-form-item>
+          <el-button type="primary" @click="saveLimits" :loading="savingLimits">保存限制设置</el-button>
+        </el-form-item>
+
+        <el-divider content-position="left">自定义速率限制规则</el-divider>
+
+        <el-form-item label="规则">
+          <div class="rules-container">
+            <div v-for="(rule, index) in customRateRules" :key="rule.id" class="custom-rule">
+              <div class="custom-rule-head">
+                <el-input v-model="rule.name" placeholder="规则名称" class="rule-name-input" />
+                <el-switch v-model="rule.enabled" active-text="启用" />
+                <el-button type="danger" text @click="customRateRules.splice(index, 1)">删除</el-button>
+              </div>
+              <div class="inline-row">
+                <el-select v-model="rule.provider_id" placeholder="提供商" class="rule-provider">
+                  <el-option label="所有提供商" :value="0" />
+                  <el-option v-for="p in providerOptions" :key="p.id" :label="p.name" :value="p.id" />
+                </el-select>
+                <el-select v-model="rule.model_name" placeholder="所有模型" clearable filterable allow-create class="rule-model">
+                  <el-option v-for="m in modelOptions" :key="m" :label="m" :value="m" />
+                </el-select>
+              </div>
+              <div class="inline-row">
+                <span class="hint-text">每</span>
+                <el-input-number v-model="rule.window" :min="1" :max="31536000" controls-position="right" />
+                <span class="hint-text">秒最多</span>
+                <el-input-number v-model="rule.max_requests" :min="1" controls-position="right" />
+                <span class="hint-text">次</span>
+              </div>
+            </div>
+            <el-button type="primary" text @click="addRateRule">+ 添加规则</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" @click="saveCustomRateRules" :loading="savingRateRules">保存规则</el-button>
+          <span class="hint-text inline-hint">可以按提供商或模型（显示名称）单独限流</span>
         </el-form-item>
       </el-form>
     </el-card>
@@ -167,6 +240,8 @@ const isMobile = useIsMobile()
 const labelPosition = computed(() => (isMobile.value ? 'top' : 'right'))
 
 // 每个区块独立的保存状态，避免点一个按钮所有按钮一起转圈
+const savingLimits = ref(false)
+const savingRateRules = ref(false)
 const savingPrompt = ref(false)
 const savingError = ref(false)
 const savingUsername = ref(false)
@@ -183,6 +258,11 @@ const systemPrompt = ref('')
 const systemPromptEnabled = ref(false)
 const customErrorEnabled = ref(false)
 const customErrorRules = ref([])
+const rateLimit = ref({ enabled: false, max_requests: 60, window: 60 })
+const concurrency = ref({ enabled: false, limit: 10, current: 0 })
+const customRateRules = ref([])
+const providerOptions = ref([])
+const modelOptions = ref([])
 
 // 直接绑定到主题 store，与顶栏的切换按钮保持同步
 const themeMode = computed({
@@ -215,7 +295,80 @@ onMounted(async () => {
   } catch {
     // 错误提示已由拦截器处理
   }
+  loadLimits()
 })
+
+async function loadLimits() {
+  try {
+    const [rateRes, concRes, rulesRes, providersRes, modelsRes] = await Promise.all([
+      api.get('/api/settings/rate-limit'),
+      api.get('/api/settings/concurrency'),
+      api.get('/api/settings/custom-rate-limit'),
+      api.get('/api/providers'),
+      api.get('/api/models')
+    ])
+    rateLimit.value = rateRes.data
+    concurrency.value = concRes.data
+    customRateRules.value = (rulesRes.data.rules || []).map(r => ({
+      id: r.id,
+      name: r.name || '',
+      provider_id: r.provider_id || 0,
+      model_name: r.model_name || '',
+      max_requests: r.max_requests || 60,
+      window: r.window || 60,
+      enabled: r.enabled !== false
+    }))
+    providerOptions.value = (providersRes.data || []).map(p => ({ id: p.id, name: p.name }))
+    modelOptions.value = [...new Set((modelsRes.data || []).map(m => m.display_name || m.original_id))]
+  } catch {}
+}
+
+async function saveLimits() {
+  savingLimits.value = true
+  try {
+    await Promise.all([
+      api.put('/api/settings/rate-limit', {
+        enabled: rateLimit.value.enabled,
+        max_requests: rateLimit.value.max_requests,
+        window: rateLimit.value.window
+      }),
+      api.put('/api/settings/concurrency', {
+        enabled: concurrency.value.enabled,
+        limit: concurrency.value.limit
+      })
+    ])
+    ElMessage.success('限制设置已保存')
+  } catch {
+  } finally {
+    savingLimits.value = false
+  }
+}
+
+function addRateRule() {
+  const nextId = customRateRules.value.reduce((max, r) => Math.max(max, r.id || 0), 0) + 1
+  customRateRules.value.push({
+    id: nextId,
+    name: `规则 ${nextId}`,
+    provider_id: 0,
+    model_name: '',
+    max_requests: 60,
+    window: 60,
+    enabled: true
+  })
+}
+
+async function saveCustomRateRules() {
+  savingRateRules.value = true
+  try {
+    await api.put('/api/settings/custom-rate-limit', {
+      rules: customRateRules.value.map(r => ({ ...r, model_name: r.model_name || '' }))
+    })
+    ElMessage.success('自定义规则已保存')
+  } catch {
+  } finally {
+    savingRateRules.value = false
+  }
+}
 
 // 以下 catch 都留空：错误提示由 api 拦截器统一弹出，避免重复提示
 
@@ -300,11 +453,13 @@ async function changePassword() {
   }
   savingPassword.value = true
   try {
-    await api.post('/api/auth/change-password', {
+    const res = await api.post('/api/auth/change-password', {
       old_password: oldPassword.value,
       new_password: newPassword.value
     })
-    ElMessage.success('密码修改成功')
+    // 修改密码后旧令牌全部失效，换成服务器返回的新令牌（其他设备需要重新登录）
+    if (res.data?.access_token) userStore.setToken(res.data.access_token)
+    ElMessage.success('密码修改成功，其他设备上的登录已失效')
     oldPassword.value = ''
     newPassword.value = ''
     confirmPassword.value = ''
@@ -344,6 +499,21 @@ async function regenerateKey() {
 .rule-keyword { width: 180px; }
 .rule-response { flex: 1; }
 
+.limit-block { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: 100%; }
+.custom-rule {
+  background: var(--el-fill-color-light);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.custom-rule-head { display: flex; align-items: center; gap: 12px; }
+.rule-name-input { width: 200px; }
+.rule-provider { width: 180px; }
+.rule-model { width: 240px; }
+
 .card-header-with-switch {
   display: flex;
   justify-content: space-between;
@@ -366,5 +536,9 @@ async function regenerateKey() {
   .warning-text { margin-left: 0; margin-top: 8px; display: block; }
   .rule-item { flex-wrap: wrap; padding-bottom: 8px; border-bottom: 1px dashed var(--el-border-color-lighter); }
   .rule-keyword, .rule-response { width: 100%; flex: none; }
+  .rule-name-input { flex: 1; width: auto; min-width: 0; }
+  .rule-provider, .rule-model { width: 100%; }
+  .limit-block .inline-row,
+  .custom-rule .inline-row { flex-direction: row; flex-wrap: wrap; align-items: center; }
 }
 </style>

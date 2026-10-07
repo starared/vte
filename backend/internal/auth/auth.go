@@ -2,8 +2,10 @@ package auth
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,73 +32,85 @@ func CheckPassword(password, hash string) bool {
 	return err == nil
 }
 
-func GenerateAPIKey() string {
+func GenerateAPIKey() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		// fallback: 使用时间戳生成
-		return hex.EncodeToString([]byte(time.Now().String()))[:64]
+		// 不能退回到时间戳之类可预测的值
+		return "", err
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
-func GenerateToken(username string) (string, error) {
+// TokenClaims 登录令牌中解析出的信息
+type TokenClaims struct {
+	UserID   int    // 新令牌使用用户 ID，修改用户名后令牌依然有效
+	Username string // 旧版本签发的令牌只有用户名
+	IssuedAt int64  // 签发时间（Unix 秒），0 表示旧令牌没有该字段
+}
+
+func GenerateToken(user *models.User) (string, error) {
+	now := time.Now()
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": username,
-		"exp": time.Now().Add(7 * 24 * time.Hour).Unix(),
+		"sub": strconv.Itoa(user.ID),
+		"uid": user.ID,
+		"iat": now.Unix(),
+		"exp": now.Add(7 * 24 * time.Hour).Unix(),
 	})
 	return token.SignedString([]byte(secretKey))
 }
 
-func ParseToken(tokenString string) (string, error) {
+func ParseToken(tokenString string) (*TokenClaims, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		return []byte(secretKey), nil
 	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-		if sub, ok := claims["sub"].(string); ok {
-			return sub, nil
-		}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || !token.Valid {
+		return nil, errors.New("invalid token")
 	}
-	return "", errors.New("invalid token")
+	result := &TokenClaims{}
+	if iat, ok := claims["iat"].(float64); ok {
+		result.IssuedAt = int64(iat)
+	}
+	if uid, ok := claims["uid"].(float64); ok && uid > 0 {
+		result.UserID = int(uid)
+		return result, nil
+	}
+	// 兼容旧版本令牌：sub 为用户名
+	if sub, ok := claims["sub"].(string); ok && sub != "" {
+		result.Username = sub
+		return result, nil
+	}
+	return nil, errors.New("invalid token")
+}
+
+const userColumns = "id, username, hashed_password, api_key, is_admin, is_active, COALESCE(password_changed_at, 0)"
+
+func scanUser(row *sql.Row) (*models.User, error) {
+	var user models.User
+	var isAdmin, isActive int
+	err := row.Scan(&user.ID, &user.Username, &user.HashedPassword, &user.APIKey, &isAdmin, &isActive, &user.PasswordChangedAt)
+	if err != nil {
+		return nil, err
+	}
+	user.IsAdmin = isAdmin == 1
+	user.IsActive = isActive == 1
+	return &user, nil
+}
+
+func GetUserByID(id int) (*models.User, error) {
+	return scanUser(database.DB().QueryRow("SELECT "+userColumns+" FROM users WHERE id = ?", id))
 }
 
 func GetUserByUsername(username string) (*models.User, error) {
-	db := database.DB()
-	row := db.QueryRow(
-		"SELECT id, username, hashed_password, api_key, is_admin, is_active FROM users WHERE username = ?",
-		username,
-	)
-
-	var user models.User
-	var isAdmin, isActive int
-	err := row.Scan(&user.ID, &user.Username, &user.HashedPassword, &user.APIKey, &isAdmin, &isActive)
-	if err != nil {
-		return nil, err
-	}
-	user.IsAdmin = isAdmin == 1
-	user.IsActive = isActive == 1
-	return &user, nil
+	return scanUser(database.DB().QueryRow("SELECT "+userColumns+" FROM users WHERE username = ?", username))
 }
 
 func GetUserByAPIKey(apiKey string) (*models.User, error) {
-	db := database.DB()
-	row := db.QueryRow(
-		"SELECT id, username, hashed_password, api_key, is_admin, is_active FROM users WHERE api_key = ? AND is_active = 1",
-		apiKey,
-	)
-
-	var user models.User
-	var isAdmin, isActive int
-	err := row.Scan(&user.ID, &user.Username, &user.HashedPassword, &user.APIKey, &isAdmin, &isActive)
-	if err != nil {
-		return nil, err
-	}
-	user.IsAdmin = isAdmin == 1
-	user.IsActive = isActive == 1
-	return &user, nil
+	return scanUser(database.DB().QueryRow("SELECT "+userColumns+" FROM users WHERE api_key = ? AND is_active = 1", apiKey))
 }
 
 // Middleware: JWT 认证（用于前端）
@@ -110,16 +124,28 @@ func JWTAuth() gin.HandlerFunc {
 		}
 
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		username, err := ParseToken(token)
+		claims, err := ParseToken(token)
 		if err != nil {
 			c.JSON(401, gin.H{"detail": "无效的认证凭据"})
 			c.Abort()
 			return
 		}
 
-		user, err := GetUserByUsername(username)
+		var user *models.User
+		if claims.UserID > 0 {
+			user, err = GetUserByID(claims.UserID)
+		} else {
+			user, err = GetUserByUsername(claims.Username)
+		}
 		if err != nil || !user.IsActive {
 			c.JSON(401, gin.H{"detail": "用户不存在或已禁用"})
+			c.Abort()
+			return
+		}
+
+		// 修改密码后，之前签发的令牌全部失效
+		if user.PasswordChangedAt > 0 && claims.IssuedAt < user.PasswordChangedAt {
+			c.JSON(401, gin.H{"detail": "密码已修改，请重新登录"})
 			c.Abort()
 			return
 		}
