@@ -5,10 +5,10 @@
       <p class="subtitle">多后端 LLM API 网关</p>
       <el-form @submit.prevent="handleLogin" :model="form">
         <el-form-item>
-          <el-input v-model="form.username" placeholder="用户名" prefix-icon="User" size="large" />
+          <el-input v-model="form.username" placeholder="用户名" autocomplete="username" :prefix-icon="User" size="large" />
         </el-form-item>
         <el-form-item>
-          <el-input v-model="form.password" type="password" placeholder="密码" prefix-icon="Lock" size="large" show-password />
+          <el-input v-model="form.password" type="password" placeholder="密码" autocomplete="current-password" :prefix-icon="Lock" size="large" show-password />
         </el-form-item>
         <el-button type="primary" native-type="submit" :loading="loading" size="large" style="width: 100%">
           登录
@@ -23,6 +23,7 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import { ElMessage } from 'element-plus'
+import { User, Lock } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -77,7 +78,7 @@ async function handleLogin() {
 }
 .subtitle {
   text-align: center;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-bottom: 28px;
   font-size: 14px;
 }

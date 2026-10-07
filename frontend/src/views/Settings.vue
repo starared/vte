@@ -5,9 +5,9 @@
     <el-card class="section">
       <template #header>外观设置</template>
       
-      <el-form label-width="120px">
+      <el-form label-width="120px" :label-position="labelPosition">
         <el-form-item label="主题模式">
-          <el-radio-group v-model="themeMode" @change="updateTheme">
+          <el-radio-group v-model="themeMode">
             <el-radio value="light">亮色</el-radio>
             <el-radio value="dark">暗色</el-radio>
             <el-radio value="auto">跟随系统</el-radio>
@@ -19,7 +19,7 @@
     <el-card class="section">
       <template #header>API 设置</template>
       
-      <el-form label-width="120px">
+      <el-form label-width="120px" :label-position="labelPosition">
         <el-form-item label="流式模式">
           <el-radio-group v-model="streamMode" @change="updateStreamMode">
             <el-radio value="auto">自动（跟随请求）</el-radio>
@@ -33,12 +33,10 @@
         
         <el-form-item label="最大重试次数">
           <el-input-number v-model="maxRetries" :min="0" :max="10" @change="updateRetrySettings" />
-          <span class="hint-text" style="margin-left: 12px">API 请求失败时的重试次数（0-10）</span>
+          <span class="hint-text inline-hint">API 请求失败时的重试次数（0-10）</span>
         </el-form-item>
       </el-form>
     </el-card>
-
-
 
     <el-card class="section">
       <template #header>
@@ -48,7 +46,7 @@
         </div>
       </template>
       
-      <el-form label-width="120px" v-if="systemPromptEnabled">
+      <el-form label-width="120px" :label-position="labelPosition" v-if="systemPromptEnabled">
         <el-form-item label="提示词内容">
           <el-input
             v-model="systemPrompt"
@@ -59,8 +57,8 @@
           />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="updateSystemPrompt" :loading="saving">保存提示词</el-button>
-          <span class="hint-text" style="margin-left: 12px">将在每次请求的 messages 最前面注入</span>
+          <el-button type="primary" @click="updateSystemPrompt" :loading="savingPrompt">保存提示词</el-button>
+          <span class="hint-text inline-hint">将在每次请求的 messages 最前面注入</span>
         </el-form-item>
       </el-form>
       <div v-else class="disabled-hint">
@@ -76,20 +74,20 @@
         </div>
       </template>
       
-      <el-form label-width="120px" v-if="customErrorEnabled">
+      <el-form label-width="120px" :label-position="labelPosition" v-if="customErrorEnabled">
         <el-form-item label="响应规则">
           <div class="rules-container">
             <div v-for="(rule, index) in customErrorRules" :key="index" class="rule-item">
-              <el-input v-model="rule.keyword" placeholder="错误关键词" style="width: 180px" />
-              <el-input v-model="rule.response" placeholder="自定义响应内容" style="flex: 1; margin-left: 8px" />
-              <el-button type="danger" text @click="removeRule(index)" style="margin-left: 8px">删除</el-button>
+              <el-input v-model="rule.keyword" placeholder="错误关键词" class="rule-keyword" />
+              <el-input v-model="rule.response" placeholder="自定义响应内容" class="rule-response" />
+              <el-button type="danger" text @click="removeRule(index)">删除</el-button>
             </div>
             <el-button type="primary" text @click="addRule">+ 添加规则</el-button>
           </div>
         </el-form-item>
         
         <el-form-item>
-          <el-button type="primary" @click="updateCustomError" :loading="saving">保存规则</el-button>
+          <el-button type="primary" @click="updateCustomError" :loading="savingError">保存规则</el-button>
         </el-form-item>
         
         <el-form-item>
@@ -106,12 +104,14 @@
     <el-card class="section">
       <template #header>账户设置</template>
       
-      <el-form label-width="100px">
+      <el-form label-width="100px" :label-position="labelPosition">
         <el-form-item label="用户名">
-          <el-input v-model="username" style="width: 300px" />
-          <el-button type="primary" @click="changeUsername" :loading="saving" style="margin-left: 12px">
-            修改用户名
-          </el-button>
+          <div class="inline-row">
+            <el-input v-model="username" class="field-input" autocomplete="username" />
+            <el-button type="primary" @click="changeUsername" :loading="savingUsername">
+              修改用户名
+            </el-button>
+          </div>
         </el-form-item>
       </el-form>
     </el-card>
@@ -119,15 +119,18 @@
     <el-card class="section">
       <template #header>修改密码</template>
       
-      <el-form label-width="100px">
+      <el-form label-width="100px" :label-position="labelPosition">
         <el-form-item label="原密码">
-          <el-input v-model="oldPassword" type="password" show-password style="width: 300px" />
+          <el-input v-model="oldPassword" type="password" show-password class="field-input" autocomplete="current-password" />
         </el-form-item>
         <el-form-item label="新密码">
-          <el-input v-model="newPassword" type="password" show-password style="width: 300px" />
+          <el-input v-model="newPassword" type="password" show-password class="field-input" autocomplete="new-password" />
+        </el-form-item>
+        <el-form-item label="确认新密码">
+          <el-input v-model="confirmPassword" type="password" show-password class="field-input" autocomplete="new-password" @keyup.enter="changePassword" />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="changePassword" :loading="saving">修改密码</el-button>
+          <el-button type="primary" @click="changePassword" :loading="savingPassword">修改密码</el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -135,16 +138,12 @@
     <el-card class="section">
       <template #header>API Key</template>
       
-      <el-form label-width="100px">
+      <el-form label-width="100px" :label-position="labelPosition">
         <el-form-item label="当前 Key">
-          <div class="api-key-row">
-            <el-input :value="showApiKey ? userStore.user?.api_key : '••••••••••••••••••••••••••••••••'" readonly style="width: 400px" />
-            <el-button @click="showApiKey = !showApiKey" style="margin-left: 8px">{{ showApiKey ? '隐藏' : '显示' }}</el-button>
-            <el-button @click="copy(userStore.user?.api_key)" style="margin-left: 8px">复制</el-button>
-          </div>
+          <ApiKeyField :value="userStore.user?.api_key" />
         </el-form-item>
         <el-form-item>
-          <el-button type="warning" @click="regenerateKey" :loading="saving">重新生成 API Key</el-button>
+          <el-button type="warning" @click="regenerateKey" :loading="regenerating">重新生成 API Key</el-button>
           <span class="warning-text">注意：重新生成后旧 Key 将失效</span>
         </el-form-item>
       </el-form>
@@ -153,26 +152,51 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useUserStore } from '../stores/user'
 import { useThemeStore } from '../stores/theme'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { useIsMobile } from '../composables/useIsMobile'
+import { confirmAction } from '../utils'
+import ApiKeyField from '../components/ApiKeyField.vue'
 import api from '../api'
 
 const userStore = useUserStore()
 const themeStore = useThemeStore()
-const saving = ref(false)
+const isMobile = useIsMobile()
+const labelPosition = computed(() => (isMobile.value ? 'top' : 'right'))
+
+// 每个区块独立的保存状态，避免点一个按钮所有按钮一起转圈
+const savingPrompt = ref(false)
+const savingError = ref(false)
+const savingUsername = ref(false)
+const savingPassword = ref(false)
+const regenerating = ref(false)
+
 const username = ref(userStore.user?.username || '')
 const oldPassword = ref('')
 const newPassword = ref('')
+const confirmPassword = ref('')
 const streamMode = ref('auto')
 const maxRetries = ref(3)
-const themeMode = ref(themeStore.theme)
-const showApiKey = ref(false)
 const systemPrompt = ref('')
 const systemPromptEnabled = ref(false)
 const customErrorEnabled = ref(false)
 const customErrorRules = ref([])
+
+// 直接绑定到主题 store，与顶栏的切换按钮保持同步
+const themeMode = computed({
+  get: () => themeStore.theme,
+  set: value => {
+    themeStore.setTheme(value)
+    ElMessage.success('主题已更新')
+  }
+})
+
+// 用户信息可能在页面打开后才加载完成
+watch(() => userStore.user?.username, name => {
+  if (name) username.value = name
+})
 
 onMounted(async () => {
   try {
@@ -188,48 +212,39 @@ onMounted(async () => {
     systemPromptEnabled.value = promptRes.data.enabled
     customErrorEnabled.value = errorRes.data.enabled
     customErrorRules.value = errorRes.data.rules || []
-    
-    themeMode.value = themeStore.theme
-  } catch (e) {
-    console.error('获取设置失败', e)
+  } catch {
+    // 错误提示已由拦截器处理
   }
 })
 
-async function updateTheme(theme) {
-  themeStore.setTheme(theme)
-  ElMessage.success('主题已更新')
-}
+// 以下 catch 都留空：错误提示由 api 拦截器统一弹出，避免重复提示
 
 async function updateStreamMode(mode) {
   try {
     await api.put('/api/settings/stream-mode', { mode })
     ElMessage.success('流式模式已更新')
-  } catch (e) {
-    ElMessage.error('更新失败')
-  }
+  } catch {}
 }
 
 async function updateRetrySettings(value) {
+  if (value === null || value === undefined) return
   try {
     await api.put('/api/settings/retry', { max_retries: value })
     ElMessage.success('重试设置已更新')
-  } catch (e) {
-    ElMessage.error('更新失败')
-  }
+  } catch {}
 }
 
 async function updateSystemPrompt() {
-  saving.value = true
+  savingPrompt.value = true
   try {
     await api.put('/api/settings/system-prompt', {
       prompt: systemPrompt.value,
       enabled: systemPromptEnabled.value
     })
     ElMessage.success('系统提示词已更新')
-  } catch (e) {
-    ElMessage.error('更新失败')
+  } catch {
   } finally {
-    saving.value = false
+    savingPrompt.value = false
   }
 }
 
@@ -244,7 +259,7 @@ function removeRule(index) {
 async function updateCustomError() {
   // 过滤掉空规则
   const validRules = customErrorRules.value.filter(r => r.keyword && r.response)
-  saving.value = true
+  savingError.value = true
   try {
     await api.put('/api/settings/custom-error', {
       enabled: customErrorEnabled.value,
@@ -252,25 +267,25 @@ async function updateCustomError() {
     })
     customErrorRules.value = validRules
     ElMessage.success('自定义错误响应已更新')
-  } catch (e) {
-    ElMessage.error('更新失败')
+  } catch {
   } finally {
-    saving.value = false
+    savingError.value = false
   }
 }
 
 async function changeUsername() {
-  if (!username.value) {
+  if (!username.value.trim()) {
     ElMessage.warning('请输入用户名')
     return
   }
-  saving.value = true
+  savingUsername.value = true
   try {
-    await api.post('/api/auth/change-username', { new_username: username.value })
+    await api.post('/api/auth/change-username', { new_username: username.value.trim() })
     ElMessage.success('用户名修改成功')
     userStore.fetchUser()
+  } catch {
   } finally {
-    saving.value = false
+    savingUsername.value = false
   }
 }
 
@@ -279,7 +294,11 @@ async function changePassword() {
     ElMessage.warning('请输入原密码和新密码')
     return
   }
-  saving.value = true
+  if (newPassword.value !== confirmPassword.value) {
+    ElMessage.warning('两次输入的新密码不一致')
+    return
+  }
+  savingPassword.value = true
   try {
     await api.post('/api/auth/change-password', {
       old_password: oldPassword.value,
@@ -288,51 +307,42 @@ async function changePassword() {
     ElMessage.success('密码修改成功')
     oldPassword.value = ''
     newPassword.value = ''
+    confirmPassword.value = ''
+  } catch {
   } finally {
-    saving.value = false
+    savingPassword.value = false
   }
 }
 
 async function regenerateKey() {
-  await ElMessageBox.confirm('确定重新生成 API Key？旧 Key 将立即失效', '确认')
-  saving.value = true
+  if (!(await confirmAction('确定重新生成 API Key？旧 Key 将立即失效'))) return
+  regenerating.value = true
   try {
     await api.post('/api/auth/regenerate-api-key')
     ElMessage.success('API Key 已重新生成')
     userStore.fetchUser()
+  } catch {
   } finally {
-    saving.value = false
+    regenerating.value = false
   }
-}
-
-function copy(text) {
-  navigator.clipboard.writeText(text)
-  ElMessage.success('已复制')
 }
 </script>
 
 <style scoped>
 .settings h2 { margin-bottom: 20px; }
 .section { margin-bottom: 20px; }
-.api-key-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.warning-text { margin-left: 12px; color: #e6a23c; font-size: 13px; }
-.hint-text { color: #909399; font-size: 12px; }
-.hint-text ul { margin: 8px 0 0 20px; padding: 0; }
-.hint-text li { margin: 4px 0; }
+.warning-text { margin-left: 12px; color: var(--el-color-warning); font-size: 13px; }
+.hint-text { color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; }
+.inline-hint { margin-left: 12px; }
 .hint-text code { background: var(--el-fill-color-light); padding: 2px 6px; border-radius: 4px; font-size: 12px; margin: 0 4px; }
 
-.rules-container { width: 100%; }
-.rule-item { display: flex; align-items: center; margin-bottom: 8px; }
+.field-input { width: 300px; }
+.inline-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
-.custom-rate-limit-container { width: 100%; }
-.custom-rate-limit-item { 
-  background: var(--el-fill-color-light); 
-  padding: 12px; 
-  border-radius: 8px; 
-  margin-bottom: 12px; 
-}
-.rule-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
-.rule-name { margin-top: 8px; }
+.rules-container { width: 100%; }
+.rule-item { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.rule-keyword { width: 180px; }
+.rule-response { flex: 1; }
 
 .card-header-with-switch {
   display: flex;
@@ -345,29 +355,16 @@ function copy(text) {
   padding: 8px 0;
 }
 
-.rate-limit-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
 @media (max-width: 768px) {
   .settings h2 { font-size: 18px; }
-  .section :deep(.el-form-item__label) { width: 80px !important; }
-  .section :deep(.el-input), .section :deep(.el-radio-group) { width: 100% !important; }
-  .api-key-row { flex-direction: column; align-items: stretch; }
-  .api-key-row .el-input { width: 100% !important; }
-  .api-key-row .el-button { margin-left: 0 !important; }
+  .section :deep(.el-card__body) { padding: 16px; }
+  .section :deep(.el-radio-group) { display: flex; flex-direction: column; align-items: flex-start; }
+  .section :deep(.el-radio) { margin-right: 0; }
+  .field-input { width: 100%; }
+  .inline-row { flex-direction: column; align-items: stretch; width: 100%; }
+  .inline-hint { margin-left: 0; display: block; margin-top: 6px; }
   .warning-text { margin-left: 0; margin-top: 8px; display: block; }
-  .rule-item { flex-wrap: wrap; gap: 8px; }
-  .rule-item .el-input { width: 100% !important; margin-left: 0 !important; }
-  .custom-rate-limit-item .rule-row { flex-direction: column; align-items: stretch; }
-  .custom-rate-limit-item .rule-row .el-select,
-  .custom-rate-limit-item .rule-row .el-input,
-  .custom-rate-limit-item .rule-row .el-input-number { width: 100% !important; margin-left: 0 !important; }
-  .rate-limit-row { flex-direction: column; align-items: stretch; }
-  .rate-limit-row .el-input-number,
-  .rate-limit-row .el-select { width: 100% !important; margin-left: 0 !important; }
+  .rule-item { flex-wrap: wrap; padding-bottom: 8px; border-bottom: 1px dashed var(--el-border-color-lighter); }
+  .rule-keyword, .rule-response { width: 100%; flex: none; }
 }
 </style>

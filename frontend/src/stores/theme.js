@@ -35,7 +35,7 @@ export const useThemeStore = defineStore('theme', () => {
   // 从服务器加载主题设置
   async function loadTheme() {
     try {
-      const res = await api.get('/api/settings/theme')
+      const res = await api.get('/api/settings/theme', { silent: true })
       theme.value = res.data.theme
       applyTheme(theme.value)
     } catch (e) {
@@ -49,7 +49,7 @@ export const useThemeStore = defineStore('theme', () => {
     theme.value = newTheme
     applyTheme(newTheme)
     try {
-      await api.put('/api/settings/theme', { theme: newTheme })
+      await api.put('/api/settings/theme', { theme: newTheme }, { silent: true })
     } catch (e) {
       console.error('保存主题设置失败', e)
     }

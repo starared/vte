@@ -2,7 +2,7 @@
   <div class="models">
     <div class="header">
       <h2>模型管理</h2>
-      <div>
+      <div class="batch-actions">
         <el-button @click="batchToggle(true)" :disabled="!selectedIds.length">批量启用</el-button>
         <el-button @click="batchToggle(false)" :disabled="!selectedIds.length">批量禁用</el-button>
       </div>
@@ -10,11 +10,11 @@
 
     <!-- 搜索和筛选 -->
     <div class="filter">
-      <el-input v-model="search" placeholder="搜索模型..." clearable style="width: 300px" />
-      <el-select v-model="filterProvider" placeholder="筛选提供商" clearable style="width: 150px; margin-left: 12px">
+      <el-input v-model="search" placeholder="搜索模型..." clearable class="filter-search" :prefix-icon="Search" />
+      <el-select v-model="filterProvider" placeholder="筛选提供商" clearable class="filter-provider">
         <el-option v-for="p in providerOptions" :key="p" :label="p" :value="p" />
       </el-select>
-      <el-select v-model="filterStatus" placeholder="筛选状态" clearable style="width: 120px; margin-left: 12px">
+      <el-select v-model="filterStatus" placeholder="筛选状态" clearable class="filter-status">
         <el-option label="已启用" :value="true" />
         <el-option label="已禁用" :value="false" />
       </el-select>
@@ -22,26 +22,41 @@
 
     <el-table :data="pagedModels" v-loading="loading" stripe @selection-change="handleSelect">
       <el-table-column type="selection" width="50" />
-      <el-table-column prop="provider_name" label="提供商" width="120" />
-      <el-table-column prop="original_id" label="原始模型 ID" min-width="200" />
+      <el-table-column v-if="!isMobile" prop="provider_name" label="提供商" width="120" />
+      <el-table-column v-if="!isMobile" prop="original_id" label="原始模型 ID" min-width="200" />
       <el-table-column prop="display_name" label="显示名称" min-width="200">
         <template #default="{ row }">
           <div class="display-name-cell">
-            <span>{{ row.display_name || row.original_id }}</span>
+            <span class="display-name">{{ row.display_name || row.original_id }}</span>
             <el-tag v-if="row.custom_name" size="small" type="warning" class="custom-tag">自定义</el-tag>
+          </div>
+          <div v-if="isMobile" class="sub-line">
+            {{ row.provider_name }}<template v-if="row.display_name && row.display_name !== row.original_id"> · {{ row.original_id }}</template>
           </div>
         </template>
       </el-table-column>
-      <el-table-column prop="is_active" label="状态" width="80">
+      <el-table-column prop="is_active" label="状态" width="70">
         <template #default="{ row }">
           <el-switch v-model="row.is_active" @change="updateModelStatus(row)" />
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="180">
+      <el-table-column label="操作" :width="isMobile ? 64 : 180">
         <template #default="{ row }">
-          <el-button size="small" type="primary" text @click="openEditDialog(row)">编辑名称</el-button>
-          <el-button v-if="row.custom_name" size="small" type="warning" text @click="resetDisplayName(row)">重置</el-button>
-          <el-button size="small" type="danger" text @click="deleteModel(row)">删除</el-button>
+          <template v-if="!isMobile">
+            <el-button size="small" type="primary" text @click="openEditDialog(row)">编辑名称</el-button>
+            <el-button v-if="row.custom_name" size="small" type="warning" text @click="resetDisplayName(row)">重置</el-button>
+            <el-button size="small" type="danger" text @click="deleteModel(row)">删除</el-button>
+          </template>
+          <el-dropdown v-else trigger="click" @command="cmd => handleCommand(cmd, row)">
+            <el-button size="small" text :icon="MoreFilled" />
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="edit">编辑名称</el-dropdown-item>
+                <el-dropdown-item v-if="row.custom_name" command="reset">重置名称</el-dropdown-item>
+                <el-dropdown-item command="delete" divided class="danger-item">删除</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </template>
       </el-table-column>
     </el-table>
@@ -53,19 +68,21 @@
         v-model:page-size="pageSize"
         :page-sizes="[10, 20, 50, 100]"
         :total="filteredModels.length"
-        layout="total, sizes, prev, pager, next"
+        :layout="isMobile ? 'total, prev, pager, next' : 'total, sizes, prev, pager, next'"
+        :pager-count="isMobile ? 5 : 7"
+        :size="isMobile ? 'small' : 'default'"
         @size-change="currentPage = 1"
       />
     </div>
 
     <!-- 编辑显示名称对话框 -->
-    <el-dialog v-model="editDialogVisible" title="编辑显示名称" width="500px">
-      <el-form label-width="100px">
+    <el-dialog v-model="editDialogVisible" title="编辑显示名称" :width="isMobile ? '92%' : '500px'">
+      <el-form label-width="100px" :label-position="isMobile ? 'top' : 'right'">
         <el-form-item label="原始模型ID">
           <el-input :model-value="editingModel?.original_id" disabled />
         </el-form-item>
         <el-form-item label="显示名称">
-          <el-input v-model="editDisplayName" placeholder="输入自定义显示名称" />
+          <el-input v-model="editDisplayName" placeholder="输入自定义显示名称" @keyup.enter="saveDisplayName" />
         </el-form-item>
         <el-form-item>
           <el-text type="info" size="small">
@@ -82,10 +99,14 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onActivated } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ref, computed, watch, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import { Search, MoreFilled } from '@element-plus/icons-vue'
 import api from '../api'
+import { useIsMobile } from '../composables/useIsMobile'
+import { confirmAction } from '../utils'
 
+const isMobile = useIsMobile()
 const loading = ref(false)
 const models = ref([])
 const selectedIds = ref([])
@@ -107,11 +128,12 @@ const providerOptions = computed(() => {
 })
 
 const filteredModels = computed(() => {
+  const keyword = search.value.trim().toLowerCase()
   return models.value.filter(m => {
-    const keyword = search.value.toLowerCase()
     if (keyword && !m.original_id.toLowerCase().includes(keyword) && !m.display_name?.toLowerCase().includes(keyword)) return false
     if (filterProvider.value && m.provider_name !== filterProvider.value) return false
-    if (filterStatus.value !== null && m.is_active !== filterStatus.value) return false
+    // el-select 清空后值可能是 '' 或 undefined，只有选了布尔值才筛选
+    if (typeof filterStatus.value === 'boolean' && m.is_active !== filterStatus.value) return false
     return true
   })
 })
@@ -121,11 +143,17 @@ const pagedModels = computed(() => {
   return filteredModels.value.slice(start, start + pageSize.value)
 })
 
+// 筛选条件变化时回到第一页，避免停留在空页
+watch([search, filterProvider, filterStatus], () => {
+  currentPage.value = 1
+})
+
 async function loadModels() {
   loading.value = true
   try {
     const res = await api.get('/api/models')
-    models.value = res.data
+    models.value = res.data || []
+  } catch {
   } finally {
     loading.value = false
   }
@@ -135,10 +163,18 @@ function handleSelect(rows) {
   selectedIds.value = rows.map(r => r.id)
 }
 
+function handleCommand(cmd, row) {
+  if (cmd === 'edit') openEditDialog(row)
+  else if (cmd === 'reset') resetDisplayName(row)
+  else if (cmd === 'delete') deleteModel(row)
+}
+
 async function updateModelStatus(row) {
-  await api.put(`/api/models/${row.id}`, {
-    is_active: row.is_active
-  })
+  try {
+    await api.put(`/api/models/${row.id}`, { is_active: row.is_active })
+  } catch {
+    row.is_active = !row.is_active // 失败时回滚开关
+  }
 }
 
 function openEditDialog(row) {
@@ -160,40 +196,42 @@ async function saveDisplayName() {
     ElMessage.success('保存成功')
     editDialogVisible.value = false
     loadModels()
+  } catch {
   } finally {
     saving.value = false
   }
 }
 
 async function resetDisplayName(row) {
-  await ElMessageBox.confirm('确定重置为自动生成的名称？', '确认')
+  if (!(await confirmAction('确定重置为自动生成的名称？'))) return
   try {
-    const res = await api.post(`/api/models/${row.id}/reset-name`)
+    await api.post(`/api/models/${row.id}/reset-name`)
     ElMessage.success('重置成功')
     loadModels()
-  } catch (e) {
-    ElMessage.error('重置失败')
-  }
+  } catch {}
 }
 
 async function deleteModel(row) {
-  await ElMessageBox.confirm('确定删除该模型？', '确认')
-  await api.delete(`/api/models/${row.id}`)
-  ElMessage.success('删除成功')
-  loadModels()
+  if (!(await confirmAction('确定删除该模型？'))) return
+  try {
+    await api.delete(`/api/models/${row.id}`)
+    ElMessage.success('删除成功')
+    loadModels()
+  } catch {}
 }
 
 async function batchToggle(active) {
-  await api.post('/api/models/batch-toggle', {
-    model_ids: selectedIds.value,
-    is_active: active
-  })
-  ElMessage.success('操作成功')
-  loadModels()
+  try {
+    await api.post('/api/models/batch-toggle', {
+      model_ids: selectedIds.value,
+      is_active: active
+    })
+    ElMessage.success('操作成功')
+    loadModels()
+  } catch {}
 }
 
 onMounted(loadModels)
-onActivated(loadModels)  // 页面激活时自动刷新
 </script>
 
 <style scoped>
@@ -205,6 +243,13 @@ onActivated(loadModels)  // 页面激活时自动刷新
   flex-wrap: wrap;
   gap: 12px;
 }
+.batch-actions {
+  display: flex;
+  gap: 8px;
+}
+.batch-actions .el-button + .el-button {
+  margin-left: 0;
+}
 .filter {
   margin-bottom: 16px;
   display: flex;
@@ -212,6 +257,9 @@ onActivated(loadModels)  // 页面激活时自动刷新
   flex-wrap: wrap;
   gap: 12px;
 }
+.filter-search { width: 300px; }
+.filter-provider { width: 150px; }
+.filter-status { width: 120px; }
 .pagination {
   margin-top: 16px;
   display: flex;
@@ -222,20 +270,28 @@ onActivated(loadModels)  // 页面激活时自动刷新
   align-items: center;
   gap: 8px;
 }
+.display-name {
+  word-break: break-all;
+}
 .custom-tag {
   flex-shrink: 0;
+}
+.sub-line {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  word-break: break-all;
+}
+.danger-item {
+  color: var(--el-color-danger);
 }
 
 @media (max-width: 768px) {
   .header h2 { font-size: 18px; }
-  .filter .el-input, .filter .el-select { 
-    width: 100% !important; 
-    margin-left: 0 !important; 
-  }
+  .filter { gap: 8px; }
+  .filter-search { width: 100%; }
+  .filter-provider,
+  .filter-status { flex: 1; width: auto; min-width: 0; }
   .pagination { justify-content: center; }
-  .pagination :deep(.el-pagination) {
-    flex-wrap: wrap;
-    justify-content: center;
-  }
 }
 </style>
