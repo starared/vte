@@ -8,10 +8,11 @@
   request is retried immediately with the next active key of the provider.
   Rotation does not count towards "max retries"; when every key has been
   tried the last upstream error is returned.
-- **Long streams no longer cut off**: `UPSTREAM_TIMEOUT_SECONDS` now limits
-  only the wait for upstream response headers (`ResponseHeaderTimeout`).
-  Previously it was an `http.Client.Timeout`, which also covered reading the
-  body and cut streams longer than 5 minutes.
+- **Long streams no longer cut off**: `UPSTREAM_TIMEOUT_SECONDS` is now the
+  maximum upstream *silence* — the wait for response headers and the gap
+  between two chunks of the body — instead of an `http.Client.Timeout` on the
+  whole exchange, which cut streams longer than 5 minutes. A stream that
+  stalls for longer than the timeout is still aborted.
 - **No duplicate upstream calls**: requests are retried after network errors
   only if they never reached the upstream (connection, DNS or proxy
   failure). Timeouts and errors after the request was sent are returned
