@@ -1,5 +1,73 @@
 # Changelog
 
+## 1.2.1
+
+### Security
+
+- Upgrade `github.com/golang-jwt/jwt/v5` 5.2.1 → 5.3.1. 5.2.1 is affected by
+  CVE-2025-30204: a token with a very large number of `.` separators makes
+  `ParseUnverified` allocate excessively. The admin API parses any
+  `Authorization` header before checking credentials, so this was reachable
+  without logging in.
+- Upgrade the remaining Go dependencies: `gin` 1.10.1 → 1.12.0,
+  `modernc.org/sqlite` 1.28.0 → 1.60.1, `golang.org/x/crypto` 0.31 → 0.57,
+  `golang.org/x/net` 0.33 → 0.59. The module now requires Go 1.26; the
+  Docker image builds with `golang:1.26-alpine` on a pinned `alpine:3.22`.
+- CI runs `gofmt`, `go vet`, `go test -race` and `govulncheck`; Dependabot
+  watches Go modules, npm packages and GitHub Actions weekly.
+
+### Gateway
+
+- **Streams without `[DONE]`**: some OpenAI-compatible upstreams close the
+  connection after the last chunk without sending `data: [DONE]`. The
+  gateway treated that as an interruption: streaming clients received a
+  complete answer followed by an `upstream_stream_error` chunk and the
+  request was not counted in token statistics; non-streaming clients under
+  `force_stream` got HTTP 502 and lost the answer. A stream that ends
+  cleanly after a `finish_reason` is now treated as complete, and
+  `data: [DONE]` is appended for streaming clients. A stream that ends with
+  no `finish_reason` is still reported as interrupted.
+- An `{"error": ...}` object inside an upstream stream now carries the
+  upstream message to the client instead of a fixed text.
+- Model lookup uses one query per field (previously a `COUNT` plus a
+  `SELECT` for each of display name and original ID).
+- Custom rate-limit counters are keyed by rule ID and window only, so
+  reordering rules in the settings page no longer resets them; counters of
+  deleted rules are dropped.
+
+### Server and frontend delivery
+
+- `http.Server` sets `ReadHeaderTimeout` (30s) and `IdleTimeout` (120s).
+  Read/write timeouts are intentionally not set so long streams are not cut.
+- `index.html` is served with `Cache-Control: no-cache`; `/assets/*`
+  (content-hashed by Vite) with `public, max-age=31536000, immutable`. After
+  an upgrade browsers previously kept an old `index.html` that referenced
+  assets which no longer existed, showing a blank page until a hard refresh.
+
+### Token estimation
+
+- gpt-4o, chatgpt-4o, gpt-4.1, gpt-4.5, gpt-5 and o1/o3/o4 models are
+  counted with the `o200k_base` vocabulary (embedded, offline). Encoding
+  selection is now ordered and deterministic; a provider prefix such as
+  `openai/` is ignored when matching.
+
+### Cleanup
+
+- Removed dead code: unused custom-concurrency variables and types, the
+  unused `modelWithProvider`-style wrappers, the context-less
+  `ChatCompletion` / `ChatCompletionStream` helpers, and the logger's
+  in-memory log ring buffer and request counters that nothing read since the
+  logs page was removed in 1.1.0.
+- Removed the stale `backend/Dockerfile` (CGO build with gcc; the SQLite
+  driver is pure Go and the root `Dockerfile` already builds with
+  `CGO_ENABLED=0`). `backend/Makefile` uses `CGO_ENABLED=0`.
+- `frontend/package-lock.json` resolves packages from `registry.npmjs.org`
+  instead of a regional mirror that is unreachable from some networks and CI
+  runners. Use a local `.npmrc` for a mirror.
+- Docs: `INCLUDE_STREAM_USAGE` is listed in the environment variable tables;
+  the token-stats readme no longer describes the removed trend chart;
+  `build-docker.sh` usage comment fixed.
+
 ## 1.2.0
 
 ### Gateway

@@ -24,28 +24,8 @@ import (
 	"vte/internal/tokenizer"
 )
 
-// 并发控制
-var (
-	currentConcurrency int64        // 当前并发数
-	concurrencyMu      sync.RWMutex // 并发设置锁
-)
-
-// 自定义并发控制 - 基于提供商/模型
-var (
-	customConcurrencyMu      sync.Mutex
-	customConcurrencyCurrent = make(map[string]int64) // key -> 当前并发数
-)
-
-// CustomConcurrencyRule 自定义并发限制规则
-type CustomConcurrencyRule struct {
-	ID           int    `json:"id"`
-	Name         string `json:"name"`          // 规则名称
-	ProviderID   int    `json:"provider_id"`   // 提供商ID，0表示所有
-	ProviderName string `json:"provider_name"` // 提供商名称（仅显示用）
-	ModelName    string `json:"model_name"`    // 模型名称，空表示所有
-	Limit        int    `json:"limit"`         // 最大并发数
-	Enabled      bool   `json:"enabled"`       // 是否启用
-}
+// 并发控制：当前并发数（原子操作）
+var currentConcurrency int64
 
 // 速率限制 - 使用滑动窗口
 var (
@@ -111,7 +91,11 @@ func checkCustomRateLimit(rules []CustomRateLimitRule, providerID int, modelName
 
 	now := time.Now()
 	pending := make(map[string][]time.Time)
-	for i, rule := range rules {
+	active := make(map[string]bool, len(rules))
+	for _, rule := range rules {
+		// 计数按规则 ID 和窗口长度区分；不含规则在列表中的位置，调整顺序不会清零计数
+		key := fmt.Sprintf("rule:%d:%d", rule.ID, rule.Window)
+		active[key] = true
 		if !rule.Enabled {
 			continue
 		}
@@ -121,7 +105,6 @@ func checkCustomRateLimit(rules []CustomRateLimitRule, providerID int, modelName
 		if rule.ModelName != "" && rule.ModelName != modelName {
 			continue
 		}
-		key := fmt.Sprintf("rule:%d:%d:%d", rule.ID, i, rule.Window)
 		cutoff := now.Add(-time.Duration(rule.Window) * time.Second)
 		kept := make([]time.Time, 0, len(customRequestTimes[key]))
 		for _, at := range customRequestTimes[key] {
@@ -136,6 +119,12 @@ func checkCustomRateLimit(rules []CustomRateLimitRule, providerID int, modelName
 	}
 	for key, times := range pending {
 		customRequestTimes[key] = times
+	}
+	// 清理已删除或已修改窗口的规则留下的计数
+	for key := range customRequestTimes {
+		if !active[key] {
+			delete(customRequestTimes, key)
+		}
 	}
 
 	return true, ""
@@ -620,7 +609,6 @@ func OpenAIChatCompletions(c *gin.Context) {
 	}
 
 	startTime := time.Now()
-	logger.RequestStart()
 
 	req := &gatewayRequest{
 		settings:    st,
@@ -661,17 +649,11 @@ func handleNonStreamResponse(c *gin.Context, r *gatewayRequest) {
 		// 检查是否有自定义错误响应
 		if matched, content := r.settings.matchCustomError(errMsg); matched {
 			logger.Info(fmt.Sprintf("%s | %s | %.2fs | 自定义响应(原错误: %s)", c.ClientIP(), r.modelName, duration, errMsg))
-			logger.RequestError()
 			writeFakeResponse(c, content, r.modelName, false)
 			return
 		}
 
 		logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), r.modelName, duration, err))
-		if errors.Is(err, context.Canceled) {
-			logger.RequestCancelled()
-		} else {
-			logger.RequestError()
-		}
 		writeUpstreamError(c, err)
 		return
 	}
@@ -690,7 +672,6 @@ func handleNonStreamResponse(c *gin.Context, r *gatewayRequest) {
 	} else {
 		logger.Info(fmt.Sprintf("%s | %s | %.2fs", c.ClientIP(), r.modelName, duration))
 	}
-	logger.RequestSuccess()
 	c.JSON(200, result)
 }
 
@@ -705,16 +686,10 @@ func handleStreamResponse(c *gin.Context, r *gatewayRequest) {
 	resp, err := r.cfg.StreamForClient(c.Request.Context(), r.payload, r.settings.maxRetries)
 	if err != nil {
 		if matched, content := r.settings.matchCustomError(err.Error()); matched {
-			logger.RequestError()
 			writeFakeResponse(c, content, modelName, true)
 			return
 		}
 		logger.Error(fmt.Sprintf("%s | %s | %.2fs | %v", c.ClientIP(), modelName, time.Since(r.startTime).Seconds(), err))
-		if errors.Is(err, context.Canceled) {
-			logger.RequestCancelled()
-		} else {
-			logger.RequestError()
-		}
 		writeUpstreamError(c, err)
 		return
 	}
@@ -724,7 +699,8 @@ func handleStreamResponse(c *gin.Context, r *gatewayRequest) {
 	c.Header("X-Accel-Buffering", "no")
 	var output strings.Builder
 	var usage map[string]interface{}
-	done := false
+	done := false     // 收到 [DONE]
+	finished := false // 收到带 finish_reason 的 choice
 	send := func(data string) error {
 		_, err := fmt.Fprintf(c.Writer, "data: %s\n\n", data)
 		c.Writer.Flush()
@@ -748,8 +724,8 @@ func handleStreamResponse(c *gin.Context, r *gatewayRequest) {
 		if chunk == nil {
 			return fmt.Errorf("上游流式响应必须为 JSON 对象")
 		}
-		if _, ok := chunk["error"]; ok {
-			return fmt.Errorf("上游在流式响应中返回错误")
+		if e, ok := chunk["error"]; ok {
+			return fmt.Errorf("上游在流式响应中返回错误: %s", proxy.ErrorMessage(e))
 		}
 		chunk["model"] = modelName
 		if u, ok := chunk["usage"].(map[string]interface{}); ok {
@@ -758,6 +734,9 @@ func handleStreamResponse(c *gin.Context, r *gatewayRequest) {
 		if choices, ok := chunk["choices"].([]interface{}); ok {
 			for _, item := range choices {
 				if ch, ok := item.(map[string]interface{}); ok {
+					if ch["finish_reason"] != nil {
+						finished = true
+					}
 					if d, ok := ch["delta"].(map[string]interface{}); ok {
 						if text, ok := d["content"].(string); ok {
 							output.WriteString(text)
@@ -772,19 +751,25 @@ func handleStreamResponse(c *gin.Context, r *gatewayRequest) {
 		}
 		return send(string(encoded))
 	})
-	// Some upstreams keep the connection open after DONE; the callback terminates below.
+	// 有些上游在 [DONE] 之后不关闭连接，回调里返回 io.EOF 终止读取；
+	// 也有些上游不发送 [DONE] 就正常结束：只要已经收到 finish_reason，同样视为完成，
+	// 并补发 [DONE] 让客户端正常收尾。
+	if err == nil && !done && finished {
+		if sendErr := send("[DONE]"); sendErr == nil {
+			done = true
+		}
+	}
 	if (err != nil && err != io.EOF) || !done {
 		if errors.Is(err, context.Canceled) || c.Request.Context().Err() != nil {
-			logger.RequestCancelled()
-		} else {
-			logger.RequestInterrupted()
-			if !c.Writer.Written() {
-				apiError(c, 502, "upstream_stream_error", "上游流式响应中断")
-			} else {
-				send(`{"error":{"message":"上游流式响应中断","type":"upstream_stream_error"}}`)
-			}
+			logger.Warn(fmt.Sprintf("%s | %s | 客户端取消", c.ClientIP(), modelName))
+			return
 		}
-		logger.Warn(fmt.Sprintf("%s | %s | 流未完成", c.ClientIP(), modelName))
+		if !c.Writer.Written() {
+			apiError(c, 502, "upstream_stream_error", "上游流式响应中断")
+		} else {
+			send(`{"error":{"message":"上游流式响应中断","type":"upstream_stream_error"}}`)
+		}
+		logger.Warn(fmt.Sprintf("%s | %s | 流未完成 | %v", c.ClientIP(), modelName, err))
 		return
 	}
 	pt, ct, tt := 0, 0, 0
@@ -803,15 +788,9 @@ func handleStreamResponse(c *gin.Context, r *gatewayRequest) {
 		recordUsage(r, pt, ct, tt)
 	}
 	logger.Info(fmt.Sprintf("%s | %s | %.2fs | Token: %d (estimated=%v)", c.ClientIP(), modelName, time.Since(r.startTime).Seconds(), tt, estimated))
-	logger.RequestSuccess()
 }
 
 func intNumber(v interface{}) int { n, _ := v.(float64); return int(n) }
-
-type modelWithProvider struct {
-	Model    *modelInfo
-	Provider *providerInfo
-}
 
 type modelInfo struct {
 	ID          int
@@ -832,35 +811,56 @@ type providerInfo struct {
 	IsActive       bool
 }
 
+// findModel 按显示名称查找启用的模型，找不到再按原始 ID 查找。
+// 每个字段只查询一次（最多取两行，用于判断是否重名）。
 func findModel(modelName string) (*modelInfo, *providerInfo, error) {
 	db := database.DB()
 	for _, field := range []string{"display_name", "original_id"} {
-		var count int
-		where := "m." + field + " = ? AND m.is_active = 1 AND p.is_active = 1"
-		if err := db.QueryRow("SELECT COUNT(*) FROM models m JOIN providers p ON m.provider_id = p.id WHERE "+where, modelName).Scan(&count); err != nil {
-			return nil, nil, err
-		}
-		if count > 1 {
-			return nil, nil, fmt.Errorf("ambiguous model: use a unique provider prefix or alias")
-		}
-		if count == 0 {
-			continue
-		}
-		return scanModelProvider(db.QueryRow(`SELECT m.id, m.original_id, m.display_name,
+		rows, err := db.Query(`SELECT m.id, m.original_id, m.display_name,
  p.id,p.name,p.base_url,p.api_key,p.provider_type,COALESCE(p.vertex_project,''),
  COALESCE(p.vertex_location,'global'),COALESCE(p.extra_headers,''),COALESCE(p.proxy_url,''),p.is_active
- FROM models m JOIN providers p ON m.provider_id=p.id WHERE `+where, modelName))
+ FROM models m JOIN providers p ON m.provider_id=p.id
+ WHERE m.`+field+` = ? AND m.is_active = 1 AND p.is_active = 1 LIMIT 2`, modelName)
+		if err != nil {
+			return nil, nil, err
+		}
+		var found []modelWithProvider
+		for rows.Next() {
+			model, provider, err := scanModelProvider(rows)
+			if err != nil {
+				rows.Close()
+				return nil, nil, err
+			}
+			found = append(found, modelWithProvider{model, provider})
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, nil, err
+		}
+		switch len(found) {
+		case 0:
+			continue
+		case 1:
+			return found[0].Model, found[0].Provider, nil
+		default:
+			return nil, nil, fmt.Errorf("ambiguous model: use a unique provider prefix or alias")
+		}
 	}
 	return nil, nil, fmt.Errorf("model not found")
 }
 
-func scanModelProvider(row *sql.Row) (*modelInfo, *providerInfo, error) {
+type modelWithProvider struct {
+	Model    *modelInfo
+	Provider *providerInfo
+}
+
+func scanModelProvider(rows *sql.Rows) (*modelInfo, *providerInfo, error) {
 	var model modelInfo
 	var provider providerInfo
 	var displayName *string
 	var isActive int
 
-	err := row.Scan(
+	err := rows.Scan(
 		&model.ID, &model.OriginalID, &displayName,
 		&provider.ID, &provider.Name, &provider.BaseURL, &provider.APIKey,
 		&provider.ProviderType, &provider.VertexProject, &provider.VertexLocation,

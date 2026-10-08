@@ -72,10 +72,14 @@ func main() {
 		}
 	}
 
-	// 使用 http.Server 以支持优雅关闭
+	// 使用 http.Server 以支持优雅关闭。
+	// 只限制读取请求头的时间和空闲连接时间（防止慢连接占满连接数）；
+	// 不设置 ReadTimeout / WriteTimeout，否则会切断长时间的流式输出。
 	srv := &http.Server{
-		Addr:    cfg.Addr(),
-		Handler: r,
+		Addr:              cfg.Addr(),
+		Handler:           r,
+		ReadHeaderTimeout: 30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	go func() {

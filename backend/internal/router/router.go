@@ -186,23 +186,26 @@ func Setup(cfg *config.Config) *gin.Engine {
 }
 
 func ServeFrontend(r *gin.Engine, dir string) {
-	r.Static("/assets", filepath.Join(dir, "assets"))
-
-	r.GET("/", func(c *gin.Context) {
-		c.File(filepath.Join(dir, "index.html"))
+	// Vite 产物文件名带内容哈希，可以长期缓存
+	assets := r.Group("/assets", func(c *gin.Context) {
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
 	})
+	assets.Static("", filepath.Join(dir, "assets"))
+
+	// index.html 引用带哈希的资源文件，自身不能被缓存，否则升级后会加载到已不存在的旧资源（白屏）
+	serveIndex := func(c *gin.Context) {
+		c.Header("Cache-Control", "no-cache")
+		c.File(filepath.Join(dir, "index.html"))
+	}
+	r.GET("/", serveIndex)
 
 	r.NoRoute(func(c *gin.Context) {
 		// API 路由返回 404
-		if len(c.Request.URL.Path) > 4 && c.Request.URL.Path[:4] == "/api" {
-			c.JSON(http.StatusNotFound, gin.H{"detail": "Not found"})
-			return
-		}
-		if len(c.Request.URL.Path) > 3 && c.Request.URL.Path[:3] == "/v1" {
+		if strings.HasPrefix(c.Request.URL.Path, "/api") || strings.HasPrefix(c.Request.URL.Path, "/v1") {
 			c.JSON(http.StatusNotFound, gin.H{"detail": "Not found"})
 			return
 		}
 		// SPA fallback
-		c.File(filepath.Join(dir, "index.html"))
+		serveIndex(c)
 	})
 }

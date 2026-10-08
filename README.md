@@ -103,7 +103,7 @@ update.bat
 
 ### Prerequisites
 
-- Go 1.21+ ([Download](https://go.dev/dl/))
+- Go 1.26+ ([Download](https://go.dev/dl/))
 - Node.js 18+ ([Download](https://nodejs.org/))
 
 ### Quick Start
@@ -155,6 +155,7 @@ cd backend
 | `DATABASE_PATH` | SQLite path | `./data/gateway.db` |
 | `MAX_REQUEST_BODY_MB` | Max gateway request body size (MB) | `32` |
 | `UPSTREAM_TIMEOUT_SECONDS` | Max upstream silence (seconds): wait for response headers and the gap between streamed chunks; total duration is unlimited | `300` |
+| `INCLUDE_STREAM_USAGE` | Ask upstreams for token usage on streamed requests (`stream_options.include_usage`); set `false` for upstreams that reject the option | `true` |
 | `TOKEN_STATS_TZ` | Time zone of the daily token-stats reset | `Asia/Shanghai` |
 | `TOKEN_STATS_RESET_HOUR` | Hour (0-23) at which token stats reset | `15` |
 | `TRUSTED_PROXIES` | Comma-separated reverse-proxy addresses/CIDRs whose `X-Forwarded-For` is trusted | `127.0.0.1,::1` |
@@ -275,6 +276,7 @@ Add several keys to a provider and requests are spread across them round-robin. 
 | `DATABASE_PATH` | SQLite database file path | `./data/gateway.db` |
 | `MAX_REQUEST_BODY_MB` | Max gateway request body size (MB) | `32` |
 | `UPSTREAM_TIMEOUT_SECONDS` | Max upstream silence (seconds): wait for response headers and the gap between streamed chunks; total duration is unlimited | `300` |
+| `INCLUDE_STREAM_USAGE` | Ask upstreams for token usage on streamed requests (`stream_options.include_usage`); set `false` for upstreams that reject the option | `true` |
 | `TOKEN_STATS_TZ` | Time zone of the daily token-stats reset | `Asia/Shanghai` |
 | `TOKEN_STATS_RESET_HOUR` | Hour (0-23) at which token stats reset | `15` |
 | `TRUSTED_PROXIES` | Comma-separated reverse-proxy addresses/CIDRs whose `X-Forwarded-For` is trusted | `127.0.0.1,::1` |
@@ -315,7 +317,7 @@ VTE works with any OpenAI-compatible API. Here are some examples:
 ## 🛠️ Development
 
 ### Prerequisites
-- Go 1.21+
+- Go 1.26+
 - Node.js 18+
 - npm or yarn
 
@@ -366,6 +368,13 @@ vte/
 ---
 
 ## 📝 Changelog
+
+### v1.2.1
+- Security: upgrade `golang-jwt/jwt` to 5.3.1 (CVE-2025-30204, unauthenticated memory exhaustion via crafted tokens) and the rest of the Go dependencies; build with Go 1.26; add Dependabot and `govulncheck` to CI.
+- Gateway: upstream streams that end without `data: [DONE]` but have a `finish_reason` are treated as complete (previously an error chunk was appended, token usage was lost, and forced-stream conversions returned 502); upstream error messages inside a stream are passed through.
+- Server: header-read and idle timeouts; `index.html` is served with `no-cache` and hashed assets with long-lived caching, so upgrades no longer leave stale pages.
+- Token estimation uses `o200k_base` for gpt-4o / gpt-4.1 / gpt-5 / o-series models.
+- Cleanup: dead code, stale `backend/Dockerfile`, CGO flags in the Makefile; `package-lock.json` points at the official npm registry; docs updated. See [CHANGELOG.md](CHANGELOG.md).
 
 ### v1.2.0
 - Gateway: rotate to the next key on upstream 401/403/429; streams are no longer cut off after 5 minutes; requests that already reached the upstream are not retried (no duplicate billing).

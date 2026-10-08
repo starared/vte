@@ -53,7 +53,8 @@ func (cfg *ProviderConfig) CompletionForClient(ctx context.Context, payload map[
 	defer resp.Body.Close()
 	result := map[string]interface{}{"object": "chat.completion"}
 	choices := map[int]map[string]interface{}{}
-	done := false
+	done := false     // 收到 [DONE]
+	finished := false // 收到带 finish_reason 的 choice
 	err = ReadEvents(resp.Body, func(data string) error {
 		if data == "[DONE]" {
 			done = true
@@ -66,8 +67,8 @@ func (cfg *ProviderConfig) CompletionForClient(ctx context.Context, payload map[
 		if chunk == nil {
 			return fmt.Errorf("invalid upstream SSE: expected object")
 		}
-		if _, ok := chunk["error"]; ok {
-			return fmt.Errorf("upstream reported an error during streaming")
+		if e, ok := chunk["error"]; ok {
+			return fmt.Errorf("upstream reported an error during streaming: %s", ErrorMessage(e))
 		}
 		for k, v := range chunk {
 			if k != "choices" && k != "object" {
@@ -90,6 +91,7 @@ func (cfg *ProviderConfig) CompletionForClient(ctx context.Context, payload map[
 			}
 			if finish := ch["finish_reason"]; finish != nil {
 				dst["finish_reason"] = finish
+				finished = true
 			}
 			if delta, ok := ch["delta"].(map[string]interface{}); ok {
 				mergeDelta(dst["message"].(map[string]interface{}), delta)
@@ -100,7 +102,8 @@ func (cfg *ProviderConfig) CompletionForClient(ctx context.Context, payload map[
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
-	if !done {
+	// 有些上游不发送 [DONE] 就正常关闭连接：只要已经收到 finish_reason，就视为完整响应
+	if !done && !finished {
 		return nil, fmt.Errorf("upstream stream ended without [DONE]")
 	}
 	indexes := make([]int, 0, len(choices))
@@ -115,6 +118,24 @@ func (cfg *ProviderConfig) CompletionForClient(ctx context.Context, payload map[
 	result["choices"] = list
 	return result, nil
 }
+
+// ErrorMessage 从上游 error 字段里取出可读的错误信息（兼容 {"error":{"message":...}} 和 {"error":"..."}）
+func ErrorMessage(e interface{}) string {
+	switch v := e.(type) {
+	case string:
+		return v
+	case map[string]interface{}:
+		if msg, ok := v["message"].(string); ok && msg != "" {
+			return msg
+		}
+	}
+	data, err := json.Marshal(e)
+	if err != nil {
+		return "unknown error"
+	}
+	return string(data)
+}
+
 func mergeDelta(dst, src map[string]interface{}) {
 	for key, value := range src {
 		if value == nil {

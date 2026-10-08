@@ -1,7 +1,7 @@
 #!/bin/bash
 # 手动发布 Docker 镜像到 Docker Hub
-# 用法: ./publish-docker.sh [版本号]
-# 例如: ./publish-docker.sh 1.0.0
+# 用法: ./build-docker.sh [版本号]
+# 例如: ./build-docker.sh 1.0.0
 
 set -e
 

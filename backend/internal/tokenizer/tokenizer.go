@@ -20,40 +20,28 @@ var (
 	cacheMu      sync.RWMutex
 )
 
-// 模型到编码器的映射
-var modelEncodingMap = map[string]string{
-	// Non-OpenAI models use an approximate fallback, not their native tokenizer.
-	"claude":        "cl100k_base",
-	"claude-3":      "cl100k_base",
-	"claude-opus":   "cl100k_base",
-	"claude-sonnet": "cl100k_base",
-	"claude-haiku":  "cl100k_base",
+const defaultEncoding = "cl100k_base"
 
-	// GPT-4 系列
-	"gpt-4":       "cl100k_base",
-	"gpt-4o":      "cl100k_base",
-	"gpt-4-turbo": "cl100k_base",
-
-	// GPT-3.5 系列
-	"gpt-3.5": "cl100k_base",
-	"gpt-35":  "cl100k_base",
-
-	// 其他模型默认
-	"default": "cl100k_base",
+// o200k_base 是 gpt-4o 及之后 OpenAI 模型使用的词表；按顺序匹配，避免 "gpt-4" 抢先命中 "gpt-4o"。
+// 非 OpenAI 模型（Claude、Gemini 等）没有公开词表，统一用 cl100k_base 近似估算。
+var o200kPatterns = []string{
+	"gpt-4o", "chatgpt-4o", "gpt-4.1", "gpt-4.5", "gpt-5",
+	"o1", "o3", "o4",
 }
 
 // getEncodingForModel 根据模型名称获取编码器名称
 func getEncodingForModel(modelName string) string {
-	modelLower := strings.ToLower(modelName)
-
-	// 检查精确匹配
-	for prefix, encoding := range modelEncodingMap {
-		if strings.Contains(modelLower, prefix) {
-			return encoding
+	name := strings.ToLower(modelName)
+	// 去掉提供商前缀（如 openai/gpt-4o）
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	for _, p := range o200kPatterns {
+		if strings.HasPrefix(name, p) {
+			return "o200k_base"
 		}
 	}
-
-	return modelEncodingMap["default"]
+	return defaultEncoding
 }
 
 // getEncoder 获取或创建编码器（带缓存）

@@ -30,7 +30,5 @@ func dailyCleanupTask() {
 			logger.Info("token记录清理完成")
 		}
 
-		// 同时重置请求计数
-		logger.ResetStats()
 	}
 }

@@ -190,11 +190,6 @@ func (cfg *ProviderConfig) ListModels(ctx context.Context) ([]map[string]interfa
 	return *result.Data, nil
 }
 
-// ChatCompletion 非流式请求（带重试）
-func (cfg *ProviderConfig) ChatCompletion(payload map[string]interface{}) (map[string]interface{}, error) {
-	return cfg.ChatCompletionWithRetry(context.Background(), payload, 3) // 默认3次重试
-}
-
 // ChatCompletionWithRetry 带重试的非流式请求
 func (cfg *ProviderConfig) ChatCompletionWithRetry(ctx context.Context, payload map[string]interface{}, maxRetries int) (map[string]interface{}, error) {
 	resp, err := cfg.doWithRetry(ctx, payload, maxRetries)
@@ -213,11 +208,6 @@ func (cfg *ProviderConfig) ChatCompletionWithRetry(ctx context.Context, payload 
 		return nil, fmt.Errorf("invalid upstream response: expected object")
 	}
 	return result, nil
-}
-
-// ChatCompletionStream 流式请求（带重试）
-func (cfg *ProviderConfig) ChatCompletionStream(payload map[string]interface{}) (*http.Response, error) {
-	return cfg.ChatCompletionStreamWithRetry(context.Background(), payload, 3) // 默认3次重试
 }
 
 // ChatCompletionStreamWithRetry 带重试的流式请求

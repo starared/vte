@@ -242,6 +242,7 @@ print(response.choices[0].message.content)
 | `DATABASE_PATH` | SQLite 数据库文件路径 | `./data/gateway.db` |
 | `MAX_REQUEST_BODY_MB` | 网关请求体大小上限（MB） | `32` |
 | `UPSTREAM_TIMEOUT_SECONDS` | 上游最长无响应时间（秒）：等待响应头、以及流式输出中两段数据之间的间隔；输出总时长不受限制 | `300` |
+| `INCLUDE_STREAM_USAGE` | 流式请求时自动向上游附加 `stream_options.include_usage` 获取 Token 用量；上游不支持该参数时设为 `false` | `true` |
 | `TOKEN_STATS_TZ` | Token 统计每日重置所用时区 | `Asia/Shanghai` |
 | `TOKEN_STATS_RESET_HOUR` | Token 统计每日重置的整点（0-23） | `15` |
 | `TRUSTED_PROXIES` | 信任的反向代理地址（逗号分隔，支持 CIDR），只有来自这些地址的 `X-Forwarded-For` 才会被采信 | `127.0.0.1,::1` |
@@ -282,7 +283,7 @@ VTE 支持任何 OpenAI 兼容的 API。以下是一些示例：
 ## 🛠️ 开发指南
 
 ### 环境要求
-- Go 1.21+
+- Go 1.26+
 - Node.js 18+
 
 ### 安装步骤
@@ -328,6 +329,13 @@ vte/
 ---
 
 ## 📝 更新日志
+
+### v1.2.1
+- 安全：`golang-jwt/jwt` 升级到 5.3.1（修复 CVE-2025-30204，构造的 token 可在未登录状态下耗尽内存），其余 Go 依赖一并升级；改用 Go 1.26 构建；CI 增加 Dependabot 和 `govulncheck`。
+- 网关：上游流式响应没有发送 `data: [DONE]` 但已给出 `finish_reason` 时视为完整响应（之前会多发一条错误、丢失 Token 统计，强制流式转换还会返回 502）；流中的上游错误信息原样传给客户端。
+- 服务端：增加请求头读取超时和空闲连接超时；`index.html` 不缓存、带哈希的静态资源长期缓存，升级后不再出现白屏需要强刷。
+- Token 估算对 gpt-4o / gpt-4.1 / gpt-5 / o 系列改用 `o200k_base` 词表。
+- 清理：无用代码、过时的 `backend/Dockerfile`、Makefile 中的 CGO 参数；`package-lock.json` 改回官方 npm 源；文档更新。详见 [CHANGELOG.md](CHANGELOG.md)。
 
 ### v1.2.0
 - 网关：上游返回 401/403/429 时自动切换到下一个密钥；流式输出不再在 5 分钟时被切断；已发到上游的请求不再自动重试（避免重复扣费）。

@@ -12,7 +12,7 @@ COPY frontend/ .
 RUN npm run build
 
 # ========== Go 后端构建 ==========
-FROM golang:1.24-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app/backend
 COPY backend/go.mod backend/go.sum ./
@@ -24,7 +24,7 @@ COPY VERSION /app/VERSION
 RUN CGO_ENABLED=0 go build -ldflags="-s -w -X vte/internal/handlers.Version=$(cat /app/VERSION)" -o vte .
 
 # ========== 最终镜像 ==========
-FROM alpine:latest
+FROM alpine:3.22
 
 RUN apk add --no-cache ca-certificates tzdata
 

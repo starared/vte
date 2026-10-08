@@ -15,7 +15,7 @@ import (
 
 // Version 当前版本号。构建时可用 -ldflags "-X vte/internal/handlers.Version=x.y.z" 覆盖；
 // 运行时如果能找到 VERSION 文件，以文件内容为准（Docker 镜像会携带该文件）。
-var Version = "1.2.0"
+var Version = "1.2.1"
 
 // 最新版本检查结果缓存，避免每次打开「关于」页面都请求 GitHub（未认证的 GitHub API 每小时只有 60 次额度）
 var latestCache struct {
